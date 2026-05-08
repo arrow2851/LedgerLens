@@ -1,15 +1,19 @@
 package com.example.ledgerlens
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Environment
 import android.provider.Telephony
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -18,12 +22,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -37,12 +45,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import com.example.ledgerlens.data.AppDatabase
 import com.example.ledgerlens.data.entity.FinancialSourceEntity
 import com.example.ledgerlens.data.entity.RawAlertEntity
 import com.example.ledgerlens.domain.source.SourceDetector
+import com.example.ledgerlens.domain.TransactionTreatments
+import com.example.ledgerlens.ui.theme.LedgerLensTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -56,7 +68,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.mutableLongStateOf
 import java.util.Calendar
 import com.example.ledgerlens.data.entity.TransactionRuleEntity
+import java.io.File
 
+private const val MERCHANT_DEFAULT_RULE_SOURCE_KEY = "__merchant_defaults__"
 
 class MainActivity : ComponentActivity() {
 
@@ -79,7 +93,7 @@ class MainActivity : ComponentActivity() {
         database = AppDatabase.getInstance(applicationContext)
 
         setContent {
-            MaterialTheme {
+            LedgerLensTheme(dynamicColor = false) {
                 LedgerLensSourceSetupApp(
                     database = database,
                     onBackfillSmsHistory = {
@@ -87,6 +101,12 @@ class MainActivity : ComponentActivity() {
                     },
                     onRefreshLatestSms = {
                         requestSmsImport(SmsImportMode.REFRESH_LATEST)
+                    },
+                    onExportTransactions = {
+                        exportTransactionsCsv()
+                    },
+                    onExportParserCorpus = {
+                        exportParserCorpusJsonl()
                     }
                 )
             }
@@ -110,16 +130,21 @@ class MainActivity : ComponentActivity() {
 
     private fun runSmsImport(mode: SmsImportMode) {
         CoroutineScope(Dispatchers.Main).launch {
-            val importedCount = withContext(Dispatchers.IO) {
-                when (mode) {
+            val (importedCount, detectedCount) = withContext(Dispatchers.IO) {
+                val imported = when (mode) {
                     SmsImportMode.BACKFILL_HISTORY -> importFinanceSmsMessages(daysBack = 365 * 5)
                     SmsImportMode.REFRESH_LATEST -> importFinanceSmsMessages(daysBack = 90)
                 }
+                val detected = detectAndSaveSources(
+                    database = database,
+                    rawAlerts = database.rawAlertDao().getAllOnce()
+                )
+                imported to detected
             }
 
             Log.d(
                 "LedgerLensSmsImport",
-                "mode=$mode importedCount=$importedCount"
+                "mode=$mode importedCount=$importedCount detectedSources=$detectedCount"
             )
         }
     }
@@ -249,6 +274,84 @@ class MainActivity : ComponentActivity() {
 
         return hasMoneyAmount && financeKeywords.any { lower.contains(it) }
     }
+
+    private fun exportTransactionsCsv() {
+        CoroutineScope(Dispatchers.Main).launch {
+            val file = withContext(Dispatchers.IO) {
+                val transactions = database.transactionDao().getAllOnce()
+                val exportDir = File(
+                    getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS),
+                    "exports"
+                )
+                exportDir.mkdirs()
+
+                val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
+                    .format(Date())
+                val exportFile = File(exportDir, "ledgerlens-transactions-$timestamp.csv")
+
+                exportFile.writeText(buildTransactionsCsv(transactions))
+                exportFile
+            }
+
+            val uri = FileProvider.getUriForFile(
+                this@MainActivity,
+                "$packageName.fileprovider",
+                file
+            )
+
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/csv"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, "LedgerLens transaction export")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+
+            startActivity(Intent.createChooser(shareIntent, "Export LedgerLens CSV"))
+        }
+    }
+
+    private fun exportParserCorpusJsonl() {
+        CoroutineScope(Dispatchers.Main).launch {
+            val file = withContext(Dispatchers.IO) {
+                val rawAlerts = database.rawAlertDao().getAllOnce()
+                val transactionsByRawAlertId = database.transactionDao()
+                    .getAllOnce()
+                    .associateBy { it.rawAlertId }
+                val exportDir = File(
+                    getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS),
+                    "parser-corpus"
+                )
+                exportDir.mkdirs()
+
+                val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
+                    .format(Date())
+                val exportFile = File(exportDir, "ledgerlens-parser-corpus-$timestamp.jsonl")
+
+                exportFile.writeText(
+                    buildParserCorpusJsonl(
+                        rawAlerts = rawAlerts,
+                        transactionsByRawAlertId = transactionsByRawAlertId
+                    )
+                )
+                exportFile
+            }
+
+            val uri = FileProvider.getUriForFile(
+                this@MainActivity,
+                "$packageName.fileprovider",
+                file
+            )
+
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "application/json"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, "LedgerLens parser corpus export")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+
+            startActivity(Intent.createChooser(shareIntent, "Export parser corpus"))
+        }
+    }
 }
 
 data class CategorySpendSummary(
@@ -258,6 +361,14 @@ data class CategorySpendSummary(
     val transactionCount: Int
 )
 
+data class ParseRunResult(
+    val matchedAlertCount: Int,
+    val parsedCount: Int,
+    val skippedCount: Int,
+    val ignoredNonTransactionCount: Int,
+    val failedCount: Int
+)
+
 enum class SmsImportMode {
     BACKFILL_HISTORY,
     REFRESH_LATEST
@@ -265,11 +376,13 @@ enum class SmsImportMode {
 
 enum class AppScreen {
     HOME,
+    SETUP,
     SOURCES,
     TRANSACTIONS,
     SUMMARY,
     REVIEW_QUEUE,
     MERCHANTS,
+    RULES,
     TOOLS
 }
 
@@ -294,6 +407,7 @@ data class MerchantSummary(
     val merchantName: String,
     val transactionCount: Int,
     val totalAmountCents: Long,
+    val primaryTreatment: String,
     val categoryName: String?,
     val subcategoryName: String?,
     val uncategorizedCount: Int,
@@ -304,7 +418,9 @@ data class MerchantSummary(
 fun LedgerLensSourceSetupApp(
     database: AppDatabase,
     onBackfillSmsHistory: () -> Unit,
-    onRefreshLatestSms: () -> Unit
+    onRefreshLatestSms: () -> Unit,
+    onExportTransactions: () -> Unit,
+    onExportParserCorpus: () -> Unit
 ) {
     val rawAlerts by database
         .rawAlertDao()
@@ -330,6 +446,16 @@ fun LedgerLensSourceSetupApp(
         .transactionDao()
         .observeCount()
         .collectAsState(initial = 0)
+
+    val activeRuleCount by database
+        .transactionRuleDao()
+        .observeActiveRuleCount()
+        .collectAsState(initial = 0)
+
+    val activeRules by database
+        .transactionRuleDao()
+        .observeActiveRules()
+        .collectAsState(initial = emptyList())
 
     val transactions by database
         .transactionDao()
@@ -366,6 +492,132 @@ fun LedgerLensSourceSetupApp(
         } ?: emptyList()
     }
 
+    val uncategorizedSourceCount = remember(sources) {
+        sources.count { !it.userConfirmed && !it.ignored }
+    }
+
+    val identifiedSourceCount = remember(sources) {
+        sources.count { it.userConfirmed && !it.ignored }
+    }
+
+    val reviewIssueCount = remember(transactions) {
+        transactions.count { hasAnyReviewIssue(it) }
+    }
+
+    val currentMonthExpenses = remember(transactions) {
+        val monthStart = getCurrentMonthStartEpochMs()
+        val monthEnd = getNextMonthStartEpochMs(monthStart)
+
+        transactions
+            .filter {
+                TransactionTreatments.countsAsSpending(
+                    treatment = it.accountingTreatment,
+                    excludedFromSpending = it.excludedFromSpending
+                )
+            }
+            .filter {
+                it.occurredAtEpochMs >= monthStart &&
+                        it.occurredAtEpochMs < monthEnd
+            }
+    }
+
+    val currentMonthSpendingCents = remember(currentMonthExpenses) {
+        currentMonthExpenses
+            .sumOf { it.amountCents }
+    }
+
+    val currentMonthActivity = remember(transactions) {
+        val monthStart = getCurrentMonthStartEpochMs()
+        val monthEnd = getNextMonthStartEpochMs(monthStart)
+
+        transactions.filter {
+            it.occurredAtEpochMs >= monthStart &&
+                    it.occurredAtEpochMs < monthEnd
+        }
+    }
+
+    val currentMonthIncomeCents = remember(currentMonthActivity) {
+        currentMonthActivity
+            .filter { it.accountingTreatment == TransactionTreatments.INCOME }
+            .sumOf { it.amountCents }
+    }
+
+    val currentMonthRefundCents = remember(currentMonthActivity) {
+        currentMonthActivity
+            .filter { it.accountingTreatment == TransactionTreatments.REFUND }
+            .sumOf { it.amountCents }
+    }
+
+    val currentMonthMovementCents = remember(currentMonthActivity) {
+        currentMonthActivity
+            .filter {
+                it.accountingTreatment in setOf(
+                    TransactionTreatments.CREDIT_CARD_PAYMENT,
+                    TransactionTreatments.TRANSFER,
+                    TransactionTreatments.PERSON_TO_PERSON
+                )
+            }
+            .sumOf { it.amountCents }
+    }
+
+    val previousMonthSpendingCents = remember(transactions) {
+        val currentMonthStart = getCurrentMonthStartEpochMs()
+        val previousMonthStart = getPreviousMonthStartEpochMs(currentMonthStart)
+
+        transactions
+            .filter {
+                TransactionTreatments.countsAsSpending(
+                    treatment = it.accountingTreatment,
+                    excludedFromSpending = it.excludedFromSpending
+                )
+            }
+            .filter {
+                it.occurredAtEpochMs >= previousMonthStart &&
+                        it.occurredAtEpochMs < currentMonthStart
+            }
+            .sumOf { it.amountCents }
+    }
+
+    val topCategoryLabel = remember(currentMonthExpenses) {
+        currentMonthExpenses
+            .groupBy { it.categoryName?.takeIf { category -> category.isNotBlank() } ?: "Unassigned" }
+            .maxByOrNull { entry -> entry.value.sumOf { it.amountCents } }
+            ?.let { entry ->
+                "${entry.key} - $${"%.2f".format(entry.value.sumOf { it.amountCents } / 100.0)}"
+            }
+            ?: "No spending yet"
+    }
+
+    val topMerchantLabel = remember(currentMonthExpenses) {
+        currentMonthExpenses
+            .groupBy { it.displayMerchantName ?: it.merchantRaw ?: "Unknown merchant" }
+            .maxByOrNull { entry -> entry.value.sumOf { it.amountCents } }
+            ?.let { entry ->
+                "${entry.key} - $${"%.2f".format(entry.value.sumOf { it.amountCents } / 100.0)}"
+            }
+            ?: "No merchant yet"
+    }
+
+    suspend fun detectAndSaveSources(): Int {
+        return detectAndSaveSources(
+            database = database,
+            rawAlerts = rawAlerts
+        )
+    }
+
+    suspend fun confirmSourceAndParse(
+        source: FinancialSourceEntity,
+        accountType: String
+    ): ParseRunResult {
+        database.financialSourceDao().confirmAccountType(
+            sourceKey = source.sourceKey,
+            accountType = accountType,
+            updatedAtEpochMs = System.currentTimeMillis()
+        )
+
+        return parseIdentifiedSourceTransactions(database)
+    }
+
     suspend fun saveMergedRule(
         sourceKey: String,
         matchPhrase: String,
@@ -374,7 +626,10 @@ fun LedgerLensSourceSetupApp(
         subcategoryName: String? = null,
         transactionType: String? = null,
         reviewStatus: String? = null,
-        excludedFromSpending: Boolean? = null
+        excludedFromSpending: Boolean? = null,
+        appliesToTreatment: String? = null,
+        applyCategoryAutomatically: Boolean = true,
+        requiresReview: Boolean = false
     ) {
         val cleanedPhrase = matchPhrase.trim()
         if (cleanedPhrase.isBlank()) return
@@ -398,6 +653,9 @@ fun LedgerLensSourceSetupApp(
                 transactionType = transactionType,
                 reviewStatus = reviewStatus,
                 excludedFromSpending = excludedFromSpending,
+                appliesToTreatment = appliesToTreatment,
+                applyCategoryAutomatically = applyCategoryAutomatically,
+                requiresReview = requiresReview,
                 active = true,
                 createdAtEpochMs = now,
                 updatedAtEpochMs = now
@@ -411,6 +669,9 @@ fun LedgerLensSourceSetupApp(
                 transactionType = transactionType ?: existing.transactionType,
                 reviewStatus = reviewStatus ?: existing.reviewStatus,
                 excludedFromSpending = excludedFromSpending ?: existing.excludedFromSpending,
+                appliesToTreatment = appliesToTreatment ?: existing.appliesToTreatment,
+                applyCategoryAutomatically = applyCategoryAutomatically,
+                requiresReview = requiresReview || existing.requiresReview,
                 active = true,
                 updatedAtEpochMs = now
             )
@@ -428,40 +689,56 @@ fun LedgerLensSourceSetupApp(
             },
             onMarkSourceType = { accountType ->
                 scope.launch(Dispatchers.IO) {
-                    database.financialSourceDao().confirmAccountType(
-                        sourceKey = selectedSource!!.sourceKey,
-                        accountType = accountType,
-                        updatedAtEpochMs = System.currentTimeMillis()
-                    )
+                    val result = confirmSourceAndParse(selectedSource!!, accountType)
 
                     withContext(Dispatchers.Main) {
-                        statusText = "Marked source as $accountType."
+                        statusText = "Marked source as $accountType and parsed ${result.parsedCount} new transactions."
                         selectedSource = null
                     }
                 }
             },
             onDismissAsNonSource = {
                 scope.launch(Dispatchers.IO) {
+                    val source = selectedSource!!
+                    val sourceKey = source.sourceKey
+
                     database.financialSourceDao().ignoreSource(
-                        sourceKey = selectedSource!!.sourceKey,
+                        sourceKey = sourceKey,
                         updatedAtEpochMs = System.currentTimeMillis()
+                    )
+                    val deletedTransactions = database.transactionDao()
+                        .deleteBySourceKey(sourceKey)
+                    updateRawAlertStatusesForSource(
+                        database = database,
+                        source = source,
+                        status = "IGNORED_SOURCE"
                     )
 
                     withContext(Dispatchers.Main) {
-                        statusText = "Dismissed source as non-source."
+                        statusText = "Dismissed source as non-source and removed $deletedTransactions parsed transactions."
                         selectedSource = null
                     }
                 }
             },
             onMoveToUncategorized = {
                 scope.launch(Dispatchers.IO) {
+                    val source = selectedSource!!
+                    val sourceKey = source.sourceKey
+
                     database.financialSourceDao().resetSourceConfirmation(
-                        sourceKey = selectedSource!!.sourceKey,
+                        sourceKey = sourceKey,
                         updatedAtEpochMs = System.currentTimeMillis()
+                    )
+                    val deletedTransactions = database.transactionDao()
+                        .deleteBySourceKey(sourceKey)
+                    updateRawAlertStatusesForSource(
+                        database = database,
+                        source = source,
+                        status = "IMPORTED_SMS"
                     )
 
                     withContext(Dispatchers.Main) {
-                        statusText = "Moved source back to uncategorized."
+                        statusText = "Moved source back to uncategorized and removed $deletedTransactions parsed transactions."
                         selectedSource = null
                     }
                 }
@@ -490,7 +767,9 @@ fun LedgerLensSourceSetupApp(
                     withContext(Dispatchers.Main) {
                         selectedTransaction = selectedTransaction!!.copy(
                             transactionType = transactionType,
+                            accountingTreatment = transactionType,
                             excludedFromSpending = excludedFromSpending,
+                            treatmentUserEdited = true,
                             updatedAtEpochMs = System.currentTimeMillis()
                         )
                     }
@@ -523,6 +802,7 @@ fun LedgerLensSourceSetupApp(
                     withContext(Dispatchers.Main) {
                         selectedTransaction = selectedTransaction!!.copy(
                             excludedFromSpending = excluded,
+                            treatmentUserEdited = true,
                             updatedAtEpochMs = System.currentTimeMillis()
                         )
                     }
@@ -543,6 +823,7 @@ fun LedgerLensSourceSetupApp(
                         selectedTransaction = selectedTransaction!!.copy(
                             merchantRaw = cleanedMerchant,
                             displayMerchantName = cleanedMerchant,
+                            merchantUserEdited = true,
                             updatedAtEpochMs = System.currentTimeMillis()
                         )
                     }
@@ -564,6 +845,7 @@ fun LedgerLensSourceSetupApp(
                         selectedTransaction = selectedTransaction!!.copy(
                             categoryName = cleanedCategory,
                             subcategoryName = cleanedSubcategory,
+                            categoryUserEdited = true,
                             updatedAtEpochMs = System.currentTimeMillis()
                         )
                     }
@@ -598,6 +880,7 @@ fun LedgerLensSourceSetupApp(
                         selectedTransaction = selectedTransaction!!.copy(
                             merchantRaw = cleanedMerchant,
                             displayMerchantName = cleanedMerchant,
+                            merchantUserEdited = true,
                             updatedAtEpochMs = System.currentTimeMillis()
                         )
 
@@ -670,6 +953,7 @@ fun LedgerLensSourceSetupApp(
                         selectedTransaction = selectedTransaction!!.copy(
                             categoryName = cleanedCategory,
                             subcategoryName = cleanedSubcategory,
+                            categoryUserEdited = true,
                             updatedAtEpochMs = System.currentTimeMillis()
                         )
 
@@ -678,11 +962,81 @@ fun LedgerLensSourceSetupApp(
                 }
             }
         )
+    } else if (activeScreen == AppScreen.SETUP) {
+        SetupScreen(
+            rawAlertCount = rawAlertCount,
+            sources = sources,
+            statusText = statusText,
+            onBack = {
+                activeScreen = AppScreen.HOME
+            },
+            onBackfillSmsHistory = {
+                statusText = "Importing SMS history..."
+                onBackfillSmsHistory()
+            },
+            onRefreshLatestSms = {
+                statusText = "Refreshing SMS..."
+                onRefreshLatestSms()
+            },
+            onDetectSources = {
+                statusText = "Looking for financial senders..."
+
+                scope.launch(Dispatchers.IO) {
+                    val detectedCount = detectAndSaveSources()
+
+                    withContext(Dispatchers.Main) {
+                        statusText = "Found $detectedCount possible financial senders."
+                    }
+                }
+            },
+            onParseIdentifiedSources = {
+                statusText = "Building spending dashboard..."
+
+                scope.launch(Dispatchers.IO) {
+                    val result = parseIdentifiedSourceTransactions(database)
+
+                    withContext(Dispatchers.Main) {
+                        statusText = "Parsed ${result.parsedCount} new transactions."
+                    }
+                }
+            },
+            onConfirmSource = { source, accountType ->
+                statusText = "Confirming ${source.displayName ?: source.sourceAddress}..."
+
+                scope.launch(Dispatchers.IO) {
+                    val result = confirmSourceAndParse(source, accountType)
+
+                    withContext(Dispatchers.Main) {
+                        statusText = "Confirmed source and parsed ${result.parsedCount} new transactions."
+                    }
+                }
+            },
+            onDismissSource = { source ->
+                statusText = "Dismissing ${source.displayName ?: source.sourceAddress}..."
+
+                scope.launch(Dispatchers.IO) {
+                    database.financialSourceDao().ignoreSource(
+                        sourceKey = source.sourceKey,
+                        updatedAtEpochMs = System.currentTimeMillis()
+                    )
+                    database.transactionDao().deleteBySourceKey(source.sourceKey)
+                    updateRawAlertStatusesForSource(
+                        database = database,
+                        source = source,
+                        status = "IGNORED_SOURCE"
+                    )
+
+                    withContext(Dispatchers.Main) {
+                        statusText = "Dismissed source."
+                    }
+                }
+            }
+        )
     } else if (activeScreen == AppScreen.SUMMARY) {
         SpendingSummaryScreen(
             transactions = transactions,
             onBack = {
-                activeScreen = AppScreen.SOURCES
+                activeScreen = AppScreen.HOME
             },
             onTransactionSelected = { transaction ->
                 selectedTransaction = transaction
@@ -694,7 +1048,7 @@ fun LedgerLensSourceSetupApp(
         ReviewQueueScreen(
             transactions = transactions,
             onBack = {
-                activeScreen = AppScreen.SOURCES
+                activeScreen = AppScreen.HOME
             },
             onTransactionSelected = { transaction ->
                 selectedTransaction = transaction
@@ -707,10 +1061,37 @@ fun LedgerLensSourceSetupApp(
         TransactionReviewScreen(
             transactions = transactions,
             onBack = {
-                activeScreen = AppScreen.SOURCES
+                activeScreen = AppScreen.HOME
             },
             onTransactionSelected = { transaction ->
                 selectedTransaction = transaction
+            }
+        )
+    } else if (activeScreen == AppScreen.RULES) {
+        RulesScreen(
+            rules = activeRules,
+            onBack = {
+                activeScreen = AppScreen.HOME
+            },
+            onDisableRule = { rule ->
+                scope.launch(Dispatchers.IO) {
+                    database.transactionRuleDao().setRuleActive(
+                        ruleId = rule.id,
+                        active = false,
+                        updatedAtEpochMs = System.currentTimeMillis()
+                    )
+                    withContext(Dispatchers.Main) {
+                        statusText = "Disabled rule: ${rule.matchPhrase}"
+                    }
+                }
+            },
+            onDeleteRule = { rule ->
+                scope.launch(Dispatchers.IO) {
+                    database.transactionRuleDao().deleteById(rule.id)
+                    withContext(Dispatchers.Main) {
+                        statusText = "Deleted rule: ${rule.matchPhrase}"
+                    }
+                }
             }
         )
     } else if (selectedMerchant != null) {
@@ -729,23 +1110,50 @@ fun LedgerLensSourceSetupApp(
             onBack = {
                 selectedMerchant = null
             },
-            onUpdateMerchantCategory = { category, subcategory ->
+            onUpdateMerchantCategory = { category, subcategory, treatment, applyCategoryAutomatically, requiresReview ->
                 scope.launch(Dispatchers.IO) {
                     val cleanedCategory = category.trim().ifBlank { null }
                     val cleanedSubcategory = subcategory.trim().ifBlank { null }
+                    val cleanedTreatment = treatment.trim().ifBlank {
+                        selectedMerchant!!.primaryTreatment
+                    }
+                    val now = System.currentTimeMillis()
 
-                    database.transactionDao().updateCategoryForMerchantName(
+                    if (applyCategoryAutomatically) {
+                        database.transactionDao().updateCategoryForMerchantName(
+                            merchantName = selectedMerchant!!.merchantName,
+                            categoryName = cleanedCategory,
+                            subcategoryName = cleanedSubcategory,
+                            updatedAtEpochMs = now
+                        )
+                    }
+
+                    database.transactionDao().updateTreatmentForMerchantName(
+                        merchantName = selectedMerchant!!.merchantName,
+                        accountingTreatment = cleanedTreatment,
+                        excludedFromSpending = TransactionTreatments.defaultExcludedFromSpending(cleanedTreatment),
+                        updatedAtEpochMs = now
+                    )
+
+                    saveMergedRule(
+                        sourceKey = MERCHANT_DEFAULT_RULE_SOURCE_KEY,
+                        matchPhrase = selectedMerchant!!.merchantName,
                         merchantName = selectedMerchant!!.merchantName,
                         categoryName = cleanedCategory,
                         subcategoryName = cleanedSubcategory,
-                        updatedAtEpochMs = System.currentTimeMillis()
+                        transactionType = cleanedTreatment,
+                        excludedFromSpending = TransactionTreatments.defaultExcludedFromSpending(cleanedTreatment),
+                        appliesToTreatment = cleanedTreatment,
+                        applyCategoryAutomatically = applyCategoryAutomatically,
+                        requiresReview = requiresReview
                     )
 
                     withContext(Dispatchers.Main) {
                         selectedMerchant = selectedMerchant!!.copy(
+                            primaryTreatment = cleanedTreatment,
                             categoryName = cleanedCategory,
                             subcategoryName = cleanedSubcategory,
-                            uncategorizedCount = 0
+                            uncategorizedCount = if (applyCategoryAutomatically) 0 else selectedMerchant!!.uncategorizedCount
                         )
                     }
                 }
@@ -769,6 +1177,21 @@ fun LedgerLensSourceSetupApp(
             rawAlertCount = rawAlertCount,
             sourceCount = sourceCount,
             transactionCount = transactionCount,
+            activeRuleCount = activeRuleCount,
+            uncategorizedSourceCount = uncategorizedSourceCount,
+            identifiedSourceCount = identifiedSourceCount,
+            reviewIssueCount = reviewIssueCount,
+            currentMonthSpendingCents = currentMonthSpendingCents,
+            currentMonthIncomeCents = currentMonthIncomeCents,
+            currentMonthRefundCents = currentMonthRefundCents,
+            currentMonthMovementCents = currentMonthMovementCents,
+            previousMonthSpendingCents = previousMonthSpendingCents,
+            currentMonthExpenseCount = currentMonthExpenses.size,
+            topCategoryLabel = topCategoryLabel,
+            topMerchantLabel = topMerchantLabel,
+            onOpenSetup = {
+                activeScreen = AppScreen.SETUP
+            },
             onOpenSources = {
                 activeScreen = AppScreen.SOURCES
             },
@@ -787,15 +1210,25 @@ fun LedgerLensSourceSetupApp(
             onOpenMerchants = {
                 activeScreen = AppScreen.MERCHANTS
             },
+            onOpenRules = {
+                activeScreen = AppScreen.RULES
+            }
         )
     } else if (activeScreen == AppScreen.TOOLS) {
         ToolsScreen(
             rawAlertCount = rawAlertCount,
             sourceCount = sourceCount,
             transactionCount = transactionCount,
+            activeRuleCount = activeRuleCount,
             statusText = statusText,
             onBack = {
                 activeScreen = AppScreen.HOME
+            },
+            onOpenSources = {
+                activeScreen = AppScreen.SOURCES
+            },
+            onOpenRules = {
+                activeScreen = AppScreen.RULES
             },
             onBackfillSmsHistory = {
                 statusText = "Running SMS backfill..."
@@ -809,33 +1242,10 @@ fun LedgerLensSourceSetupApp(
                 statusText = "Detecting SMS sources..."
 
                 scope.launch(Dispatchers.IO) {
-                    database.financialSourceDao().deleteLegacyNonSenderSources()
-
-                    val detectedSources = SourceDetector.detect(rawAlerts)
-
-                    detectedSources.forEach { detected ->
-                        val existing = database
-                            .financialSourceDao()
-                            .getBySourceKey(detected.sourceKey)
-
-                        val sourceToSave = if (existing == null) {
-                            detected
-                        } else {
-                            detected.copy(
-                                confirmedAccountType = existing.confirmedAccountType,
-                                displayName = existing.displayName ?: detected.displayName,
-                                userConfirmed = existing.userConfirmed,
-                                ignored = existing.ignored,
-                                createdAtEpochMs = existing.createdAtEpochMs,
-                                updatedAtEpochMs = System.currentTimeMillis()
-                            )
-                        }
-
-                        database.financialSourceDao().upsert(sourceToSave)
-                    }
+                    val detectedCount = detectAndSaveSources()
 
                     withContext(Dispatchers.Main) {
-                        statusText = "Detected ${detectedSources.size} possible SMS sources."
+                        statusText = "Detected $detectedCount possible SMS sources."
                     }
                 }
             },
@@ -843,68 +1253,45 @@ fun LedgerLensSourceSetupApp(
                 statusText = "Parsing transactions from identified sources..."
 
                 scope.launch(Dispatchers.IO) {
-                    val rawAlertsOnce = database.rawAlertDao().getAllOnce()
-                    val identifiedSources = database
-                        .financialSourceDao()
-                        .getIdentifiedSourcesOnce()
-
-                    var parsedCount = 0
-                    var skippedCount = 0
-                    var failedCount = 0
-                    var matchedAlertCount = 0
-
-                    identifiedSources.forEach { source ->
-                        val matchingAlerts = rawAlertsOnce.filter { rawAlert ->
-                            SourceDetector.matchesSource(rawAlert, source)
-                        }
-
-                        matchedAlertCount += matchingAlerts.size
-
-                        matchingAlerts.forEach { rawAlert ->
-                            if (database.transactionDao().countByRawAlertId(rawAlert.id) > 0) {
-                                skippedCount++
-                                return@forEach
-                            }
-
-                            val parsedTransaction = SmsTransactionParser.parse(
-                                rawAlert = rawAlert,
-                                source = source
-                            )
-
-                            if (parsedTransaction == null) {
-                                database.rawAlertDao().updateProcessingStatus(
-                                    rawAlert.id,
-                                    "FAILED_TRANSACTION_PARSE"
-                                )
-                                failedCount++
-                            } else {
-                                val rules = database
-                                    .transactionRuleDao()
-                                    .getActiveRulesForSource(source.sourceKey)
-
-                                val ruleAdjustedTransaction = applyRulesToTransaction(
-                                    transaction = parsedTransaction,
-                                    rawAlert = rawAlert,
-                                    rules = rules
-                                )
-
-                                database.transactionDao().insert(ruleAdjustedTransaction)
-
-                                database.rawAlertDao().updateProcessingStatus(
-                                    rawAlert.id,
-                                    "PARSED_TRANSACTION"
-                                )
-
-                                parsedCount++
-                            }
-                        }
-                    }
+                    val result = parseIdentifiedSourceTransactions(database)
 
                     withContext(Dispatchers.Main) {
                         statusText =
-                            "Matched $matchedAlertCount SMS from identified sources. Parsed $parsedCount, skipped $skippedCount, failed $failedCount."
+                            "Matched ${result.matchedAlertCount} SMS from identified sources. Parsed ${result.parsedCount}, skipped existing ${result.skippedCount}, ignored ${result.ignoredNonTransactionCount}, failed ${result.failedCount}."
                     }
                 }
+            },
+            onReparseTransactions = {
+                statusText = "Reparsing transactions from identified sources..."
+
+                scope.launch(Dispatchers.IO) {
+                    database.transactionDao().deleteAll()
+                    val result = parseIdentifiedSourceTransactions(database)
+
+                    withContext(Dispatchers.Main) {
+                        statusText =
+                            "Reparsed from ${result.matchedAlertCount} SMS. Parsed ${result.parsedCount}, ignored ${result.ignoredNonTransactionCount}, failed ${result.failedCount}."
+                    }
+                }
+            },
+            onReapplySavedRules = {
+                statusText = "Reapplying saved rules to existing transactions..."
+
+                scope.launch(Dispatchers.IO) {
+                    val updatedCount = reapplySavedRulesToExistingTransactions(database)
+
+                    withContext(Dispatchers.Main) {
+                        statusText = "Reapplied saved rules to $updatedCount existing transactions."
+                    }
+                }
+            },
+            onExportTransactions = {
+                statusText = "Opening transaction export..."
+                onExportTransactions()
+            },
+            onExportParserCorpus = {
+                statusText = "Opening parser corpus export..."
+                onExportParserCorpus()
             },
             onClearAll = {
                 scope.launch(Dispatchers.IO) {
@@ -934,14 +1321,293 @@ fun LedgerLensSourceSetupApp(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+fun SetupScreen(
+    rawAlertCount: Int,
+    sources: List<FinancialSourceEntity>,
+    statusText: String,
+    onBack: () -> Unit,
+    onBackfillSmsHistory: () -> Unit,
+    onRefreshLatestSms: () -> Unit,
+    onDetectSources: () -> Unit,
+    onParseIdentifiedSources: () -> Unit,
+    onConfirmSource: (FinancialSourceEntity, String) -> Unit,
+    onDismissSource: (FinancialSourceEntity) -> Unit
+) {
+    val possibleSources = sources
+        .filter { !it.userConfirmed && !it.ignored }
+        .sortedWith(
+            compareByDescending<FinancialSourceEntity> { it.detectionConfidence }
+                .thenByDescending { it.messageCount }
+                .thenByDescending { it.lastSeenEpochMs }
+        )
+    val identifiedCount = sources.count { it.userConfirmed && !it.ignored }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Setup") },
+                navigationIcon = {
+                    TextButton(onClick = onBack) {
+                        Text("Back")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 16.dp),
+            contentPadding = PaddingValues(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            item {
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp)
+                    ) {
+                        Text(
+                            text = "Connect SMS Sources",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Text(
+                            text = "Choose which SMS senders are real financial alerts. Once a source is confirmed, LedgerLens parses its transactions automatically.",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Text("Imported SMS: $rawAlertCount")
+                        Text("Confirmed sources: $identifiedCount")
+                        Text("Possible sources: ${possibleSources.size}")
+
+                        if (statusText.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = statusText,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                    }
+                }
+            }
+
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp)
+                    ) {
+                        Text(
+                            text = "Import",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = onRefreshLatestSms,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Refresh")
+                            }
+
+                            OutlinedButton(
+                                onClick = onBackfillSmsHistory,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Backfill")
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Button(
+                            onClick = onDetectSources,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Find Sources")
+                        }
+
+                        if (identifiedCount > 0) {
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Button(
+                                onClick = onParseIdentifiedSources,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Build Dashboard")
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                SourceSectionHeader(
+                    title = "Possible Financial Sources",
+                    count = possibleSources.size
+                )
+            }
+
+            if (possibleSources.isEmpty()) {
+                item {
+                    EmptySectionText(
+                        if (rawAlertCount == 0) {
+                            "Import SMS first. Possible financial senders will show here."
+                        } else {
+                            "No possible sources need review."
+                        }
+                    )
+                }
+            } else {
+                items(
+                    items = possibleSources,
+                    key = { it.sourceKey }
+                ) { source ->
+                    SetupSourceCard(
+                        source = source,
+                        onConfirmSource = onConfirmSource,
+                        onDismissSource = onDismissSource
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SetupSourceCard(
+    source: FinancialSourceEntity,
+    onConfirmSource: (FinancialSourceEntity, String) -> Unit,
+    onDismissSource: (FinancialSourceEntity) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp)
+        ) {
+            Text(
+                text = source.displayName
+                    ?: source.institutionName
+                    ?: "Sender ${source.sourceAddress}",
+                style = MaterialTheme.typography.titleSmall
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = "Sender ${source.sourceAddress} - ${source.messageCount} messages - ${"%.0f".format(source.detectionConfidence * 100)}% confidence",
+                style = MaterialTheme.typography.bodyMedium
+            )
+
+            if (!source.sampleMessage.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = source.sampleMessage.take(180),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = { onConfirmSource(source, "CREDIT_CARD") },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Credit")
+                }
+
+                Button(
+                    onClick = { onConfirmSource(source, "CHECKING") },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Checking")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { onConfirmSource(source, "DEBIT_CARD") },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Debit")
+                }
+
+                OutlinedButton(
+                    onClick = { onConfirmSource(source, "UNKNOWN") },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Other")
+                }
+
+                OutlinedButton(
+                    onClick = { onDismissSource(source) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Ignore")
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 fun SourceListScreen(
     sources: List<FinancialSourceEntity>,
     onBack: () -> Unit,
     onSourceSelected: (FinancialSourceEntity) -> Unit
 ) {
-    val uncategorizedSources = sources.filter { !it.userConfirmed && !it.ignored }
-    val identifiedSources = sources.filter { it.userConfirmed && !it.ignored }
-    val nonSources = sources.filter { it.ignored }
+    var searchText by remember {
+        mutableStateOf("")
+    }
+
+    val visibleSources = remember(sources, searchText) {
+        val query = searchText.trim().lowercase(Locale.US)
+        if (query.isBlank()) {
+            sources
+        } else {
+            sources.filter { source ->
+                listOfNotNull(
+                    source.displayName,
+                    source.institutionName,
+                    source.sourceAddress,
+                    source.accountHint,
+                    source.suggestedAccountType,
+                    source.confirmedAccountType,
+                    source.sampleMessage
+                ).any { it.lowercase(Locale.US).contains(query) }
+            }
+        }
+    }
+
+    val uncategorizedSources = visibleSources.filter { !it.userConfirmed && !it.ignored }
+    val identifiedSources = visibleSources.filter { it.userConfirmed && !it.ignored }
+    val nonSources = visibleSources.filter { it.ignored }
 
     Scaffold(
         topBar = {
@@ -969,6 +1635,16 @@ fun SourceListScreen(
                 Text(
                     text = "Review SMS senders and classify them as identified sources, non-sources, or uncategorized possible sources.",
                     style = MaterialTheme.typography.bodyMedium
+                )
+            }
+
+            item {
+                OutlinedTextField(
+                    value = searchText,
+                    onValueChange = { searchText = it },
+                    label = { Text("Search sources") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
                 )
             }
 
@@ -1042,106 +1718,6 @@ fun SourceListScreen(
                         onClick = { onSourceSelected(source) }
                     )
                 }
-            }
-        }
-    }
-}
-
-@Composable
-fun SetupActionsCard(
-    onBackfillSmsHistory: () -> Unit,
-    onRefreshLatestSms: () -> Unit,
-    onDetectSources: () -> Unit,
-    onParseIdentifiedSources: () -> Unit,
-    onViewTransactions: () -> Unit,
-    onViewSummary: () -> Unit,
-    onViewReviewQueue: () -> Unit,
-    onClearAll: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp)
-        ) {
-            Text(
-                text = "Setup Actions",
-                style = MaterialTheme.typography.titleSmall
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = onBackfillSmsHistory,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Backfill")
-                }
-
-                Button(
-                    onClick = onRefreshLatestSms,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Refresh")
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Button(
-                onClick = onDetectSources,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Detect Sources")
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Button(
-                onClick = onParseIdentifiedSources,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Parse Identified Sources")
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Button(
-                onClick = onViewTransactions,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("View Transactions")
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Button(
-                onClick = onViewSummary,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("View Spending Summary")
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Button(
-                onClick = onViewReviewQueue,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Review Queue")
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            OutlinedButton(
-                onClick = onClearAll,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Clear All Test Data")
             }
         }
     }
@@ -1461,6 +2037,11 @@ fun SmsMessageCard(
                 style = MaterialTheme.typography.labelSmall
             )
 
+            Text(
+                text = "Status: ${alert.processingStatus}",
+                style = MaterialTheme.typography.labelSmall
+            )
+
             Spacer(modifier = Modifier.height(6.dp))
 
             Text(
@@ -1482,12 +2063,16 @@ fun TransactionReviewScreen(
         mutableStateOf(TransactionFilter.ALL)
     }
 
+    var searchText by remember {
+        mutableStateOf("")
+    }
+
     val sortedTransactions = remember(transactions) {
         transactions.sortedByDescending { it.occurredAtEpochMs }
     }
 
-    val filteredTransactions = remember(sortedTransactions, selectedFilter) {
-        when (selectedFilter) {
+    val filteredTransactions = remember(sortedTransactions, selectedFilter, searchText) {
+        val base = when (selectedFilter) {
             TransactionFilter.ALL -> sortedTransactions
 
             TransactionFilter.NEEDS_REVIEW -> sortedTransactions.filter {
@@ -1495,29 +2080,60 @@ fun TransactionReviewScreen(
             }
 
             TransactionFilter.EXPENSES -> sortedTransactions.filter {
-                it.transactionType == "EXPENSE"
+                it.accountingTreatment == TransactionTreatments.EXPENSE
             }
 
             TransactionFilter.TRANSFERS -> sortedTransactions.filter {
-                it.transactionType == "TRANSFER"
+                it.accountingTreatment in setOf(
+                    TransactionTreatments.TRANSFER,
+                    TransactionTreatments.PERSON_TO_PERSON
+                )
             }
 
             TransactionFilter.CREDIT_CARD_PAYMENTS -> sortedTransactions.filter {
-                it.transactionType == "CREDIT_CARD_PAYMENT"
+                it.accountingTreatment == TransactionTreatments.CREDIT_CARD_PAYMENT
             }
 
             TransactionFilter.EXCLUDED_FROM_SPENDING -> sortedTransactions.filter {
-                it.excludedFromSpending
+                it.accountingTreatment != TransactionTreatments.EXPENSE ||
+                        it.excludedFromSpending
+            }
+        }
+
+        val query = searchText.trim().lowercase(Locale.US)
+        if (query.isBlank()) {
+            base
+        } else {
+            base.filter { transaction ->
+                listOfNotNull(
+                    transaction.displayMerchantName,
+                    transaction.merchantRaw,
+                    transaction.categoryName,
+                    transaction.subcategoryName,
+                    transaction.sourceInstitution,
+                    transaction.accountingTreatment,
+                    transaction.transactionType,
+                    transaction.reviewStatus
+                ).any { it.lowercase(Locale.US).contains(query) }
             }
         }
     }
 
     val totalCount = sortedTransactions.size
     val needsReviewCount = sortedTransactions.count { it.reviewStatus == "NEEDS_REVIEW" }
-    val excludedCount = sortedTransactions.count { it.excludedFromSpending }
-    val expenseCount = sortedTransactions.count { it.transactionType == "EXPENSE" }
-    val transferCount = sortedTransactions.count { it.transactionType == "TRANSFER" }
-    val creditCardPaymentCount = sortedTransactions.count { it.transactionType == "CREDIT_CARD_PAYMENT" }
+    val excludedCount = sortedTransactions.count {
+        it.accountingTreatment != TransactionTreatments.EXPENSE || it.excludedFromSpending
+    }
+    val expenseCount = sortedTransactions.count { it.accountingTreatment == TransactionTreatments.EXPENSE }
+    val transferCount = sortedTransactions.count {
+        it.accountingTreatment in setOf(
+            TransactionTreatments.TRANSFER,
+            TransactionTreatments.PERSON_TO_PERSON
+        )
+    }
+    val creditCardPaymentCount = sortedTransactions.count {
+        it.accountingTreatment == TransactionTreatments.CREDIT_CARD_PAYMENT
+    }
 
     Scaffold(
         topBar = {
@@ -1564,6 +2180,16 @@ fun TransactionReviewScreen(
                 )
             }
 
+            item {
+                OutlinedTextField(
+                    value = searchText,
+                    onValueChange = { searchText = it },
+                    label = { Text("Search transactions") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+            }
+
             if (filteredTransactions.isEmpty()) {
                 item {
                     EmptySectionText("No transactions found for this filter.")
@@ -1606,7 +2232,7 @@ fun TransactionSummaryCard(
             Text("Total parsed: $totalCount")
             Text("Expenses: $expenseCount")
             Text("Needs review: $needsReviewCount")
-            Text("Excluded from spending: $excludedCount")
+            Text("Tracked outside spending: $excludedCount")
         }
     }
 }
@@ -1633,14 +2259,14 @@ fun TransactionCard(
             Text(
                 text = transaction.displayMerchantName
                     ?: transaction.sourceInstitution
-                    ?: transaction.transactionType,
+                    ?: treatmentLabel(transaction.accountingTreatment),
                 style = MaterialTheme.typography.titleSmall
             )
 
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                text = "$${"%.2f".format(amount)} • ${transaction.transactionType}",
+                text = "$${"%.2f".format(amount)} • ${treatmentLabel(transaction.accountingTreatment)}",
                 style = MaterialTheme.typography.bodyMedium
             )
 
@@ -1673,7 +2299,7 @@ fun TransactionCard(
 
             if (transaction.excludedFromSpending) {
                 Text(
-                    text = "Excluded from spending totals",
+                    text = "Tracked outside Spending Summary",
                     style = MaterialTheme.typography.labelSmall
                 )
             }
@@ -1782,7 +2408,7 @@ fun TransactionFilterCard(
                 )
 
                 TransactionFilterButton(
-                    label = "Excluded ($excludedCount)",
+                    label = "Other ($excludedCount)",
                     selected = selectedFilter == TransactionFilter.EXCLUDED_FROM_SPENDING,
                     onClick = { onFilterSelected(TransactionFilter.EXCLUDED_FROM_SPENDING) },
                     modifier = Modifier.weight(1f)
@@ -1835,7 +2461,9 @@ fun TransactionDetailScreen(
         SimpleDateFormat("MMM dd, yyyy h:mm a", Locale.getDefault())
     }
 
-    val amount = transaction.amountCents / 100.0
+    var showTechnicalDetails by remember(transaction.id) {
+        mutableStateOf(false)
+    }
 
     Scaffold(
         topBar = {
@@ -1860,37 +2488,34 @@ fun TransactionDetailScreen(
             item {
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Card(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp)
-                    ) {
-                        Text(
-                            text = "Parsed Fields",
-                            style = MaterialTheme.typography.titleMedium
-                        )
+                TransactionOverviewCard(
+                    transaction = transaction,
+                    formatter = formatter
+                )
+            }
 
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        DetailRow("Amount", "$${"%.2f".format(amount)}")
-                        DetailRow("Transaction type", transaction.transactionType)
-                        DetailRow("Merchant raw", transaction.merchantRaw ?: "Not detected")
-                        DetailRow("Display merchant", transaction.displayMerchantName ?: "Not detected")
-                        DetailRow("Category", transaction.categoryName ?: "Not assigned")
-                        DetailRow("Subcategory", transaction.subcategoryName ?: "Not assigned")
-                        DetailRow("Source institution", transaction.sourceInstitution ?: "Not detected")
-                        DetailRow("Account hint", transaction.accountHint ?: "Not detected")
-                        DetailRow("Review status", transaction.reviewStatus)
-                        DetailRow("Parse confidence", "${"%.0f".format(transaction.parseConfidence * 100)}%")
-                        DetailRow(
-                            "Excluded from spending",
-                            if (transaction.excludedFromSpending) "Yes" else "No"
-                        )
-                        DetailRow("Occurred at", formatter.format(Date(transaction.occurredAtEpochMs)))
-                        DetailRow("Received at", formatter.format(Date(transaction.receivedAtEpochMs)))
-                        DetailRow("Source key", transaction.sourceKey)
-                    }
+            if (
+                transaction.accountingTreatment in TransactionTreatments.movementTreatments ||
+                transaction.parserNotes.orEmpty().contains("Zelle", ignoreCase = true)
+            ) {
+                item {
+                    TransferResolutionCard(
+                        onMarkPersonalTransfer = {
+                            onUpdateTransactionType(TransactionTreatments.TRANSFER, true)
+                            onUpdateCategory("Transfer", "Personal")
+                            onUpdateReviewStatus("REVIEWED")
+                        },
+                        onMarkReimbursement = {
+                            onUpdateTransactionType(TransactionTreatments.INCOME, true)
+                            onUpdateCategory("Reimbursement", "Personal")
+                            onUpdateReviewStatus("REVIEWED")
+                        },
+                        onMarkExpense = {
+                            onUpdateTransactionType(TransactionTreatments.EXPENSE, false)
+                            onUpdateCategory("Other", "Uncategorized")
+                            onUpdateReviewStatus("REVIEWED")
+                        }
+                    )
                 }
             }
 
@@ -1913,7 +2538,10 @@ fun TransactionDetailScreen(
             item {
                 CategoryCorrectionCard(
                     transaction = transaction,
-                    onUpdateCategory = onUpdateCategory
+                    onUpdateCategory = { category, subcategory ->
+                        onUpdateCategory(category, subcategory)
+                        onUpdateReviewStatus("REVIEWED")
+                    }
                 )
             }
 
@@ -1928,60 +2556,196 @@ fun TransactionDetailScreen(
             }
 
             item {
-                Card(
+                OutlinedButton(
+                    onClick = { showTechnicalDetails = !showTechnicalDetails },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp)
-                    ) {
-                        Text(
-                            text = "Parser Notes",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Text(
-                            text = transaction.parserNotes
-                                ?: "No parser notes.",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
+                    Text(if (showTechnicalDetails) "Hide Details" else "Inspect Details")
                 }
             }
 
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth()
+            if (showTechnicalDetails) {
+                item {
+                    TransactionTechnicalDetailsCard(
+                        transaction = transaction,
+                        rawAlert = rawAlert,
+                        formatter = formatter
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun TransactionOverviewCard(
+    transaction: TransactionEntity,
+    formatter: SimpleDateFormat
+) {
+    val amount = transaction.amountCents / 100.0
+    val merchant = transaction.displayMerchantName
+        ?: transaction.merchantRaw
+        ?: "Unknown merchant"
+    val category = if (transaction.categoryName.isNullOrBlank()) {
+        "Uncategorized"
+    } else {
+        transaction.categoryName +
+                if (!transaction.subcategoryName.isNullOrBlank()) {
+                    " / ${transaction.subcategoryName}"
+                } else {
+                    ""
+                }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp)
+        ) {
+            Text(
+                text = merchant,
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = "$${"%.2f".format(amount)}",
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+
+            Text("${treatmentLabel(transaction.accountingTreatment)} - $category")
+            Text(formatter.format(Date(transaction.occurredAtEpochMs)))
+
+            if (transaction.excludedFromSpending) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Tracked outside Spending Summary",
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
+
+            if (transaction.reviewStatus == "NEEDS_REVIEW") {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Needs review",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.tertiary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun TransactionTechnicalDetailsCard(
+    transaction: TransactionEntity,
+    rawAlert: RawAlertEntity?,
+    formatter: SimpleDateFormat
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp)
+        ) {
+            Text(
+                text = "Inspection",
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            DetailRow("Merchant raw", transaction.merchantRaw ?: "Not detected")
+            DetailRow("Source institution", transaction.sourceInstitution ?: "Not detected")
+            DetailRow("Account hint", transaction.accountHint ?: "Not detected")
+            DetailRow("Review status", transaction.reviewStatus)
+            DetailRow("Parse confidence", "${"%.0f".format(transaction.parseConfidence * 100)}%")
+            DetailRow("Received at", formatter.format(Date(transaction.receivedAtEpochMs)))
+            DetailRow("Source key", transaction.sourceKey)
+            DetailRow("Parser notes", transaction.parserNotes ?: "No parser notes.")
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Original SMS",
+                style = MaterialTheme.typography.titleSmall
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            if (rawAlert == null) {
+                Text(
+                    text = "Original SMS was not found.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            } else {
+                DetailRow("SMS title", rawAlert.title ?: "None")
+                DetailRow("SMS date", formatter.format(Date(rawAlert.postTimeEpochMs)))
+                DetailRow("Raw status", rawAlert.processingStatus)
+
+                Text(
+                    text = rawAlert.combinedText,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun TransferResolutionCard(
+    onMarkPersonalTransfer: () -> Unit,
+    onMarkReimbursement: () -> Unit,
+    onMarkExpense: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp)
+        ) {
+            Text(
+                text = "What was this transfer?",
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = "Transfers can be personal movement, reimbursements, or real spending. Pick the closest treatment.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Button(
+                onClick = onMarkPersonalTransfer,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Personal Transfer - Exclude")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onMarkReimbursement,
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp)
-                    ) {
-                        Text(
-                            text = "Original SMS",
-                            style = MaterialTheme.typography.titleMedium
-                        )
+                    Text("Reimbursement")
+                }
 
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        if (rawAlert == null) {
-                            Text(
-                                text = "Original raw SMS was not found.",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        } else {
-                            DetailRow("SMS title", rawAlert.title ?: "None")
-                            DetailRow("SMS date", formatter.format(Date(rawAlert.postTimeEpochMs)))
-                            DetailRow("Raw status", rawAlert.processingStatus)
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            Text(
-                                text = rawAlert.combinedText,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-                    }
+                OutlinedButton(
+                    onClick = onMarkExpense,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Count as Spending")
                 }
             }
         }
@@ -2022,14 +2786,14 @@ fun TransactionCorrectionCard(
             modifier = Modifier.padding(12.dp)
         ) {
             Text(
-                text = "Quick Correction",
+                text = "Classification",
                 style = MaterialTheme.typography.titleMedium
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Transaction Type",
+                text = "Accounting Treatment",
                 style = MaterialTheme.typography.titleSmall
             )
 
@@ -2040,14 +2804,14 @@ fun TransactionCorrectionCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Button(
-                    onClick = { onUpdateTransactionType("EXPENSE", false) },
+                    onClick = { onUpdateTransactionType(TransactionTreatments.EXPENSE, false) },
                     modifier = Modifier.weight(1f)
                 ) {
                     Text("Expense")
                 }
 
                 Button(
-                    onClick = { onUpdateTransactionType("TRANSFER", true) },
+                    onClick = { onUpdateTransactionType(TransactionTreatments.TRANSFER, true) },
                     modifier = Modifier.weight(1f)
                 ) {
                     Text("Transfer")
@@ -2061,14 +2825,14 @@ fun TransactionCorrectionCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Button(
-                    onClick = { onUpdateTransactionType("CREDIT_CARD_PAYMENT", true) },
+                    onClick = { onUpdateTransactionType(TransactionTreatments.CREDIT_CARD_PAYMENT, true) },
                     modifier = Modifier.weight(1f)
                 ) {
                     Text("CC Pay")
                 }
 
                 Button(
-                    onClick = { onUpdateTransactionType("INCOME", false) },
+                    onClick = { onUpdateTransactionType(TransactionTreatments.INCOME, true) },
                     modifier = Modifier.weight(1f)
                 ) {
                     Text("Income")
@@ -2082,18 +2846,27 @@ fun TransactionCorrectionCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Button(
-                    onClick = { onUpdateTransactionType("REFUND", false) },
+                    onClick = { onUpdateTransactionType(TransactionTreatments.REFUND, true) },
                     modifier = Modifier.weight(1f)
                 ) {
                     Text("Refund")
                 }
 
                 Button(
-                    onClick = { onUpdateTransactionType("UNKNOWN", false) },
+                    onClick = { onUpdateTransactionType(TransactionTreatments.PERSON_TO_PERSON, true) },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Unknown")
+                    Text("Person")
                 }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            OutlinedButton(
+                onClick = { onUpdateTransactionType(TransactionTreatments.UNKNOWN, true) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Mark as Unknown")
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -2127,7 +2900,7 @@ fun TransactionCorrectionCard(
             Spacer(modifier = Modifier.height(12.dp))
 
             Text(
-                text = "Spending Treatment",
+                text = "Spending Summary Override",
                 style = MaterialTheme.typography.titleSmall
             )
 
@@ -2141,22 +2914,22 @@ fun TransactionCorrectionCard(
                     onClick = { onUpdateExcludedFromSpending(false) },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Include")
+                    Text("Count in Spending")
                 }
 
                 Button(
                     onClick = { onUpdateExcludedFromSpending(true) },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Exclude")
+                    Text("Track Outside")
                 }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Current: ${transaction.transactionType} • ${transaction.reviewStatus} • ${
-                    if (transaction.excludedFromSpending) "Excluded" else "Included"
+                text = "Current: ${treatmentLabel(transaction.accountingTreatment)} • ${transaction.reviewStatus} • ${
+                    if (transaction.excludedFromSpending) "Outside spending" else "Spending"
                 }",
                 style = MaterialTheme.typography.labelSmall
             )
@@ -2196,7 +2969,7 @@ fun MerchantCorrectionCard(
             modifier = Modifier.padding(12.dp)
         ) {
             Text(
-                text = "Merchant / Payee Correction",
+                text = "Merchant / Payee",
                 style = MaterialTheme.typography.titleMedium
             )
 
@@ -2278,14 +3051,14 @@ fun SimilarTransactionsCorrectionCard(
             modifier = Modifier.padding(12.dp)
         ) {
             Text(
-                text = "Apply to Similar Transactions",
+                text = "Apply as Rule",
                 style = MaterialTheme.typography.titleMedium
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "This matches transactions from the same source where the original SMS contains this phrase.",
+                text = "Create or update a saved rule for transactions from the same source when the original SMS contains this phrase.",
                 style = MaterialTheme.typography.bodySmall
             )
 
@@ -2388,8 +3161,8 @@ fun SimilarTransactionsCorrectionCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Current classification: ${transaction.transactionType} • ${transaction.reviewStatus} • ${
-                    if (transaction.excludedFromSpending) "Excluded" else "Included"
+                text = "Current classification: ${treatmentLabel(transaction.accountingTreatment)} • ${transaction.reviewStatus} • ${
+                    if (transaction.excludedFromSpending) "Outside spending" else "Spending"
                 }",
                 style = MaterialTheme.typography.labelSmall
             )
@@ -2463,7 +3236,7 @@ fun CategoryCorrectionCard(
             modifier = Modifier.padding(12.dp)
         ) {
             Text(
-                text = "Category / Subcategory Correction",
+                text = "Category",
                 style = MaterialTheme.typography.titleMedium
             )
 
@@ -2569,8 +3342,12 @@ fun SpendingSummaryScreen(
 
     val includedExpensesForMonth = remember(transactions, selectedMonthStart, selectedMonthEnd) {
         transactions
-            .filter { it.transactionType == "EXPENSE" }
-            .filter { !it.excludedFromSpending }
+            .filter {
+                TransactionTreatments.countsAsSpending(
+                    treatment = it.accountingTreatment,
+                    excludedFromSpending = it.excludedFromSpending
+                )
+            }
             .filter {
                 it.occurredAtEpochMs >= selectedMonthStart &&
                         it.occurredAtEpochMs < selectedMonthEnd
@@ -2695,7 +3472,7 @@ fun SpendingSummaryScreen(
                 if (categorySummaries.isEmpty()) {
                     item {
                         EmptySectionText(
-                            "No included expense transactions for this month. Mark transactions as Expense and assign categories."
+                            "No expense transactions counted in this month yet. Mark transactions as Expense and assign categories."
                         )
                     }
                 } else {
@@ -2705,6 +3482,7 @@ fun SpendingSummaryScreen(
                     ) { summary ->
                         CategorySpendCard(
                             summary = summary,
+                            totalAmountCents = totalExpenseCents,
                             onClick = {
                                 selectedCategorySummary = summary
                             }
@@ -2731,7 +3509,7 @@ fun SpendingSummaryTopCard(
             modifier = Modifier.padding(12.dp)
         ) {
             Text(
-                text = "Included Spending",
+                text = "Spending",
                 style = MaterialTheme.typography.titleMedium
             )
 
@@ -2744,13 +3522,13 @@ fun SpendingSummaryTopCard(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            Text("Included expense transactions: $includedExpenseCount")
+            Text("Transactions counted as spending: $includedExpenseCount")
             Text("Unassigned category transactions: $unassignedCount")
 
             Spacer(modifier = Modifier.height(6.dp))
 
             Text(
-                text = "This excludes transfers, credit card payments, and transactions marked excluded from spending.",
+                text = "This view counts expenses only. Payments, transfers, income, and refunds are tracked separately.",
                 style = MaterialTheme.typography.labelSmall
             )
         }
@@ -2760,9 +3538,15 @@ fun SpendingSummaryTopCard(
 @Composable
 fun CategorySpendCard(
     summary: CategorySpendSummary,
+    totalAmountCents: Long,
     onClick: () -> Unit
 ) {
     val amount = summary.amountCents / 100.0
+    val share = if (totalAmountCents > 0) {
+        summary.amountCents.toFloat() / totalAmountCents.toFloat()
+    } else {
+        0f
+    }
 
     Card(
         modifier = Modifier
@@ -2788,8 +3572,28 @@ fun CategorySpendCard(
                 style = MaterialTheme.typography.bodyLarge
             )
 
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(share.coerceIn(0f, 1f))
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(MaterialTheme.colorScheme.primary)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
             Text(
-                text = "Transactions: ${summary.transactionCount}",
+                text = "Transactions: ${summary.transactionCount} - ${"%.0f".format(share * 100)}%",
                 style = MaterialTheme.typography.labelSmall
             )
 
@@ -2894,6 +3698,18 @@ fun getPreviousMonthStartEpochMs(monthStartEpochMs: Long): Long {
 fun formatMonthYear(monthStartEpochMs: Long): String {
     val formatter = SimpleDateFormat("MMMM yyyy", Locale.getDefault())
     return formatter.format(Date(monthStartEpochMs))
+}
+
+fun treatmentLabel(treatment: String): String {
+    return when (treatment) {
+        TransactionTreatments.EXPENSE -> "Expense"
+        TransactionTreatments.INCOME -> "Income"
+        TransactionTreatments.REFUND -> "Refund"
+        TransactionTreatments.CREDIT_CARD_PAYMENT -> "Credit card payment"
+        TransactionTreatments.TRANSFER -> "Transfer"
+        TransactionTreatments.PERSON_TO_PERSON -> "Person to person"
+        else -> "Unknown"
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -3077,13 +3893,22 @@ fun CategoryTransactionCard(
 }
 
 fun hasMissingMerchant(transaction: TransactionEntity): Boolean {
-    return transaction.displayMerchantName.isNullOrBlank() &&
+    return transaction.accountingTreatment in setOf(
+        TransactionTreatments.EXPENSE,
+        TransactionTreatments.REFUND,
+        TransactionTreatments.PERSON_TO_PERSON,
+        TransactionTreatments.CREDIT_CARD_PAYMENT,
+        TransactionTreatments.INCOME
+    ) &&
+            transaction.displayMerchantName.isNullOrBlank() &&
             transaction.merchantRaw.isNullOrBlank()
 }
 
 fun hasMissingCategory(transaction: TransactionEntity): Boolean {
-    return transaction.transactionType == "EXPENSE" &&
-            !transaction.excludedFromSpending &&
+    return TransactionTreatments.countsAsSpending(
+        treatment = transaction.accountingTreatment,
+        excludedFromSpending = transaction.excludedFromSpending
+    ) &&
             transaction.categoryName.isNullOrBlank()
 }
 
@@ -3374,7 +4199,7 @@ fun ReviewTransactionCard(
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                text = "$${"%.2f".format(amount)} • ${transaction.transactionType}",
+                text = "$${"%.2f".format(amount)} • ${treatmentLabel(transaction.accountingTreatment)}",
                 style = MaterialTheme.typography.bodyMedium
             )
 
@@ -3418,16 +4243,364 @@ fun normalizeRulePhrase(phrase: String): String {
     return phrase.trim().lowercase(Locale.US)
 }
 
+suspend fun parseIdentifiedSourceTransactions(database: AppDatabase): ParseRunResult {
+    val rawAlertsOnce = database.rawAlertDao().getAllOnce()
+    val identifiedSources = database
+        .financialSourceDao()
+        .getIdentifiedSourcesOnce()
+    val merchantDefaultRules = database
+        .transactionRuleDao()
+        .getActiveRulesForSource(MERCHANT_DEFAULT_RULE_SOURCE_KEY)
+
+    var parsedCount = 0
+    var skippedCount = 0
+    var ignoredNonTransactionCount = 0
+    var failedCount = 0
+    var matchedAlertCount = 0
+
+    identifiedSources.forEach { source ->
+        val sourceRules = database
+            .transactionRuleDao()
+            .getActiveRulesForSource(source.sourceKey)
+
+        val matchingAlerts = rawAlertsOnce.filter { rawAlert ->
+            SourceDetector.matchesSource(rawAlert, source)
+        }
+
+        matchedAlertCount += matchingAlerts.size
+
+        matchingAlerts.forEach { rawAlert ->
+            if (database.transactionDao().countByRawAlertId(rawAlert.id) > 0) {
+                skippedCount++
+                return@forEach
+            }
+
+            val parsedTransaction = SmsTransactionParser.parse(
+                rawAlert = rawAlert,
+                source = source,
+                sourceMessages = matchingAlerts.map { it.combinedText }
+            )
+
+            if (parsedTransaction == null) {
+                val status = if (SmsTransactionParser.isNonTransactionAlert(rawAlert)) {
+                    "IGNORED_NON_TRANSACTION"
+                } else {
+                    "FAILED_TRANSACTION_PARSE"
+                }
+
+                database.rawAlertDao().updateProcessingStatus(
+                    rawAlert.id,
+                    status
+                )
+
+                if (status == "FAILED_TRANSACTION_PARSE") {
+                    failedCount++
+                } else {
+                    ignoredNonTransactionCount++
+                }
+            } else {
+                val ruleAdjustedTransaction = applyRulesToTransaction(
+                    transaction = parsedTransaction,
+                    rawAlert = rawAlert,
+                    sourceRules = sourceRules,
+                    merchantDefaultRules = merchantDefaultRules
+                )
+
+                database.transactionDao().insert(ruleAdjustedTransaction)
+
+                database.rawAlertDao().updateProcessingStatus(
+                    rawAlert.id,
+                    "PARSED_TRANSACTION"
+                )
+
+                parsedCount++
+            }
+        }
+    }
+
+    return ParseRunResult(
+        matchedAlertCount = matchedAlertCount,
+        parsedCount = parsedCount,
+        skippedCount = skippedCount,
+        ignoredNonTransactionCount = ignoredNonTransactionCount,
+        failedCount = failedCount
+    )
+}
+
+suspend fun detectAndSaveSources(
+    database: AppDatabase,
+    rawAlerts: List<RawAlertEntity>
+): Int {
+    database.financialSourceDao().deleteLegacyNonSenderSources()
+
+    val detectedSources = SourceDetector.detect(rawAlerts)
+
+    detectedSources.forEach { detected ->
+        val existing = database
+            .financialSourceDao()
+            .getBySourceKey(detected.sourceKey)
+
+        val sourceToSave = if (existing == null) {
+            detected
+        } else {
+            detected.copy(
+                confirmedAccountType = existing.confirmedAccountType,
+                displayName = existing.displayName ?: detected.displayName,
+                userConfirmed = existing.userConfirmed,
+                ignored = existing.ignored,
+                createdAtEpochMs = existing.createdAtEpochMs,
+                updatedAtEpochMs = System.currentTimeMillis()
+            )
+        }
+
+        database.financialSourceDao().upsert(sourceToSave)
+    }
+
+    return detectedSources.size
+}
+
+suspend fun reapplySavedRulesToExistingTransactions(database: AppDatabase): Int {
+    val rawAlertsById = database.rawAlertDao()
+        .getAllOnce()
+        .associateBy { it.id }
+
+    val merchantDefaultRules = database
+        .transactionRuleDao()
+        .getActiveRulesForSource(MERCHANT_DEFAULT_RULE_SOURCE_KEY)
+
+    val sourceRuleCache = mutableMapOf<String, List<TransactionRuleEntity>>()
+    var updatedCount = 0
+
+    database.transactionDao().getAllOnce().forEach { transaction ->
+        val rawAlert = rawAlertsById[transaction.rawAlertId] ?: return@forEach
+        val sourceRules = sourceRuleCache.getOrPut(transaction.sourceKey) {
+            database.transactionRuleDao().getActiveRulesForSource(transaction.sourceKey)
+        }
+
+        val updatedTransaction = applyRulesToTransaction(
+            transaction = transaction,
+            rawAlert = rawAlert,
+            sourceRules = sourceRules,
+            merchantDefaultRules = merchantDefaultRules
+        )
+
+        if (updatedTransaction != transaction) {
+            database.transactionDao().update(updatedTransaction)
+            updatedCount++
+        }
+    }
+
+    return updatedCount
+}
+
+suspend fun updateRawAlertStatusesForSource(
+    database: AppDatabase,
+    source: FinancialSourceEntity,
+    status: String
+) {
+    database.rawAlertDao()
+        .getAllOnce()
+        .filter { rawAlert -> SourceDetector.matchesSource(rawAlert, source) }
+        .forEach { rawAlert ->
+            database.rawAlertDao().updateProcessingStatus(
+                rawAlertId = rawAlert.id,
+                status = status
+            )
+        }
+}
+
+fun buildTransactionsCsv(transactions: List<TransactionEntity>): String {
+    val header = listOf(
+        "id",
+        "occurredAt",
+        "amount",
+        "currency",
+        "type",
+        "accountingTreatment",
+        "merchant",
+        "category",
+        "subcategory",
+        "source",
+        "accountHint",
+        "reviewStatus",
+        "excludedFromSpending",
+        "parseConfidence",
+        "notes"
+    )
+
+    val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+    val rows = transactions.map { transaction ->
+        listOf(
+            transaction.id.toString(),
+            formatter.format(Date(transaction.occurredAtEpochMs)),
+            "%.2f".format(Locale.US, transaction.amountCents / 100.0),
+            transaction.currency,
+            transaction.transactionType,
+            transaction.accountingTreatment,
+            transaction.displayMerchantName ?: transaction.merchantRaw ?: "",
+            transaction.categoryName ?: "",
+            transaction.subcategoryName ?: "",
+            transaction.sourceInstitution ?: transaction.sourceKey,
+            transaction.accountHint ?: "",
+            transaction.reviewStatus,
+            transaction.excludedFromSpending.toString(),
+            "%.2f".format(Locale.US, transaction.parseConfidence),
+            transaction.parserNotes ?: ""
+        )
+    }
+
+    return (listOf(header) + rows)
+        .joinToString(separator = "\n") { row ->
+            row.joinToString(separator = ",") { csvEscape(it) }
+        } + "\n"
+}
+
+fun buildParserCorpusJsonl(
+    rawAlerts: List<RawAlertEntity>,
+    transactionsByRawAlertId: Map<Long, TransactionEntity>
+): String {
+    return rawAlerts
+        .sortedBy { it.postTimeEpochMs }
+        .joinToString(separator = "\n", postfix = "\n") { alert ->
+            val transaction = transactionsByRawAlertId[alert.id]
+            buildString {
+                append("{")
+                appendJsonField("rawAlertId", alert.id)
+                append(",")
+                appendJsonField("notificationKey", alert.notificationKey)
+                append(",")
+                appendJsonField("sourcePackage", alert.sourcePackage)
+                append(",")
+                appendJsonField("sender", alert.title.orEmpty().removePrefix("SMS from ").trim())
+                append(",")
+                appendJsonField("timestampEpochMs", alert.postTimeEpochMs)
+                append(",")
+                appendJsonField("processingStatus", alert.processingStatus)
+                append(",")
+                appendJsonField("rawSmsText", alert.combinedText)
+                append(",")
+                append("\"parsed\":")
+                if (transaction == null) {
+                    append("null")
+                } else {
+                    append("{")
+                    appendJsonField("transactionId", transaction.id)
+                    append(",")
+                    appendJsonField("sourceKey", transaction.sourceKey)
+                    append(",")
+                    appendJsonField("amountCents", transaction.amountCents)
+                    append(",")
+                    appendJsonField("currency", transaction.currency)
+                    append(",")
+                    appendJsonField("transactionType", transaction.transactionType)
+                    append(",")
+                    appendJsonField("accountingTreatment", transaction.accountingTreatment)
+                    append(",")
+                    appendJsonField("merchantRaw", transaction.merchantRaw)
+                    append(",")
+                    appendJsonField("displayMerchantName", transaction.displayMerchantName)
+                    append(",")
+                    appendJsonField("categoryName", transaction.categoryName)
+                    append(",")
+                    appendJsonField("subcategoryName", transaction.subcategoryName)
+                    append(",")
+                    appendJsonField("reviewStatus", transaction.reviewStatus)
+                    append(",")
+                    appendJsonField("parseConfidence", transaction.parseConfidence)
+                    append(",")
+                    appendJsonField("parserNotes", transaction.parserNotes)
+                    append(",")
+                    appendJsonField("merchantUserEdited", transaction.merchantUserEdited)
+                    append(",")
+                    appendJsonField("categoryUserEdited", transaction.categoryUserEdited)
+                    append(",")
+                    appendJsonField("treatmentUserEdited", transaction.treatmentUserEdited)
+                    append("}")
+                }
+                append("}")
+            }
+        }
+}
+
+private fun StringBuilder.appendJsonField(name: String, value: String?) {
+    append("\"")
+    append(jsonEscape(name))
+    append("\":")
+    if (value == null) {
+        append("null")
+    } else {
+        append("\"")
+        append(jsonEscape(value))
+        append("\"")
+    }
+}
+
+private fun StringBuilder.appendJsonField(name: String, value: Long) {
+    append("\"")
+    append(jsonEscape(name))
+    append("\":")
+    append(value)
+}
+
+private fun StringBuilder.appendJsonField(name: String, value: Double) {
+    append("\"")
+    append(jsonEscape(name))
+    append("\":")
+    append("%.4f".format(Locale.US, value))
+}
+
+private fun StringBuilder.appendJsonField(name: String, value: Boolean) {
+    append("\"")
+    append(jsonEscape(name))
+    append("\":")
+    append(value)
+}
+
+private fun jsonEscape(value: String): String {
+    return buildString {
+        value.forEach { char ->
+            when (char) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\b' -> append("\\b")
+                '\u000C' -> append("\\f")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> {
+                    if (char.code < 0x20) {
+                        append("\\u")
+                        append(char.code.toString(16).padStart(4, '0'))
+                    } else {
+                        append(char)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun csvEscape(value: String): String {
+    val escaped = value.replace("\"", "\"\"")
+    return if (escaped.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) {
+        "\"$escaped\""
+    } else {
+        escaped
+    }
+}
+
 fun applyRulesToTransaction(
     transaction: TransactionEntity,
     rawAlert: RawAlertEntity,
-    rules: List<TransactionRuleEntity>
+    sourceRules: List<TransactionRuleEntity>,
+    merchantDefaultRules: List<TransactionRuleEntity> = emptyList()
 ): TransactionEntity {
     var updated = transaction
     val appliedRulePhrases = mutableListOf<String>()
 
-    rules.forEach { rule ->
+    sourceRules.forEach { rule ->
         if (!rule.active) return@forEach
+        if (!rule.matchesTreatment(updated.accountingTreatment)) return@forEach
 
         val phrase = rule.matchPhrase.trim()
         if (phrase.isBlank()) return@forEach
@@ -3439,18 +4612,85 @@ fun applyRulesToTransaction(
 
         if (!matches) return@forEach
 
+        val ruleTreatment = rule.transactionType ?: updated.accountingTreatment
+        val shouldApplyCategory = rule.shouldApplyCategoryTo(updated.accountingTreatment)
+
         updated = updated.copy(
-            merchantRaw = rule.merchantName ?: updated.merchantRaw,
-            displayMerchantName = rule.merchantName ?: updated.displayMerchantName,
-            categoryName = rule.categoryName ?: updated.categoryName,
-            subcategoryName = rule.subcategoryName ?: updated.subcategoryName,
-            transactionType = rule.transactionType ?: updated.transactionType,
-            reviewStatus = rule.reviewStatus ?: updated.reviewStatus,
-            excludedFromSpending = rule.excludedFromSpending ?: updated.excludedFromSpending,
+            merchantRaw = if (!updated.merchantUserEdited) rule.merchantName ?: updated.merchantRaw else updated.merchantRaw,
+            displayMerchantName = if (!updated.merchantUserEdited) rule.merchantName ?: updated.displayMerchantName else updated.displayMerchantName,
+            categoryName = if (!updated.categoryUserEdited && shouldApplyCategory) rule.categoryName ?: updated.categoryName else updated.categoryName,
+            subcategoryName = if (!updated.categoryUserEdited && shouldApplyCategory) rule.subcategoryName ?: updated.subcategoryName else updated.subcategoryName,
+            transactionType = if (!updated.treatmentUserEdited) ruleTreatment else updated.transactionType,
+            accountingTreatment = if (!updated.treatmentUserEdited) ruleTreatment else updated.accountingTreatment,
+            reviewStatus = when {
+                rule.requiresReview -> "NEEDS_REVIEW"
+                rule.reviewStatus != null -> rule.reviewStatus
+                else -> updated.reviewStatus
+            },
+            excludedFromSpending = if (!updated.treatmentUserEdited) {
+                rule.excludedFromSpending ?: TransactionTreatments.defaultExcludedFromSpending(ruleTreatment)
+            } else {
+                updated.excludedFromSpending
+            },
             updatedAtEpochMs = System.currentTimeMillis()
         )
 
         appliedRulePhrases.add(rule.matchPhrase)
+    }
+
+    val merchantName = (updated.displayMerchantName ?: updated.merchantRaw)
+        ?.trim()
+
+    if (
+        !merchantName.isNullOrBlank()
+    ) {
+        val normalizedMerchant = normalizeRulePhrase(merchantName)
+        val merchantRule = merchantDefaultRules.firstOrNull { rule ->
+            rule.active &&
+                    rule.matchesTreatment(updated.accountingTreatment) &&
+                    (
+                            rule.normalizedMatchPhrase == normalizedMerchant ||
+                                    normalizeRulePhrase(rule.merchantName ?: rule.matchPhrase) == normalizedMerchant
+                            )
+        }
+
+        if (merchantRule != null) {
+            val merchantTreatment = merchantRule.transactionType ?: updated.accountingTreatment
+            val shouldApplyCategory = merchantRule.shouldApplyCategoryTo(updated.accountingTreatment)
+            val categoryName = if (!updated.categoryUserEdited && shouldApplyCategory) {
+                merchantRule.categoryName ?: updated.categoryName
+            } else {
+                updated.categoryName
+            }
+            val subcategoryName = if (!updated.categoryUserEdited && shouldApplyCategory) {
+                merchantRule.subcategoryName ?: updated.subcategoryName
+            } else {
+                updated.subcategoryName
+            }
+
+            updated = updated.copy(
+                merchantRaw = if (!updated.merchantUserEdited) merchantRule.merchantName ?: updated.merchantRaw else updated.merchantRaw,
+                displayMerchantName = if (!updated.merchantUserEdited) merchantRule.merchantName ?: updated.displayMerchantName else updated.displayMerchantName,
+                categoryName = categoryName,
+                subcategoryName = subcategoryName,
+                transactionType = if (!updated.treatmentUserEdited) merchantTreatment else updated.transactionType,
+                accountingTreatment = if (!updated.treatmentUserEdited) merchantTreatment else updated.accountingTreatment,
+                excludedFromSpending = if (!updated.treatmentUserEdited) {
+                    merchantRule.excludedFromSpending
+                        ?: TransactionTreatments.defaultExcludedFromSpending(merchantTreatment)
+                } else {
+                    updated.excludedFromSpending
+                },
+                reviewStatus = when {
+                    merchantRule.requiresReview -> "NEEDS_REVIEW"
+                    !categoryName.isNullOrBlank() && updated.reviewStatus == "NEEDS_REVIEW" -> "AUTO_PARSED"
+                    else -> updated.reviewStatus
+                },
+                updatedAtEpochMs = System.currentTimeMillis()
+            )
+
+            appliedRulePhrases.add("merchant default: ${merchantRule.matchPhrase}")
+        }
     }
 
     if (appliedRulePhrases.isEmpty()) {
@@ -3467,23 +4707,60 @@ fun applyRulesToTransaction(
     )
 }
 
+private fun TransactionRuleEntity.matchesTreatment(treatment: String): Boolean {
+    return appliesToTreatment.isNullOrBlank() ||
+            appliesToTreatment == treatment ||
+            transactionType != null
+}
+
+private fun TransactionRuleEntity.shouldApplyCategoryTo(treatment: String): Boolean {
+    if (!applyCategoryAutomatically || requiresReview) return false
+    if (categoryName.isNullOrBlank()) return false
+    return !appliesToTreatment.isNullOrBlank() ||
+            treatment == TransactionTreatments.EXPENSE ||
+            transactionType == treatment
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     rawAlertCount: Int,
     sourceCount: Int,
     transactionCount: Int,
+    activeRuleCount: Int,
+    uncategorizedSourceCount: Int,
+    identifiedSourceCount: Int,
+    reviewIssueCount: Int,
+    currentMonthSpendingCents: Long,
+    currentMonthIncomeCents: Long,
+    currentMonthRefundCents: Long,
+    currentMonthMovementCents: Long,
+    previousMonthSpendingCents: Long,
+    currentMonthExpenseCount: Int,
+    topCategoryLabel: String,
+    topMerchantLabel: String,
+    onOpenSetup: () -> Unit,
     onOpenSources: () -> Unit,
     onOpenReviewQueue: () -> Unit,
     onOpenTransactions: () -> Unit,
     onOpenSummary: () -> Unit,
     onOpenMerchants: () -> Unit,
+    onOpenRules: () -> Unit,
     onOpenTools: () -> Unit
 ){
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("LedgerLens") }
+            )
+        },
+        bottomBar = {
+            HomeBottomNav(
+                onOpenHome = {},
+                onOpenSummary = onOpenSummary,
+                onOpenReviewQueue = onOpenReviewQueue,
+                onOpenMerchants = onOpenMerchants,
+                onOpenTransactions = onOpenTransactions
             )
         }
     ) { padding ->
@@ -3501,60 +4778,76 @@ fun HomeScreen(
                 HomeStatusCard(
                     rawAlertCount = rawAlertCount,
                     sourceCount = sourceCount,
-                    transactionCount = transactionCount
+                    transactionCount = transactionCount,
+                    activeRuleCount = activeRuleCount,
+                    uncategorizedSourceCount = uncategorizedSourceCount,
+                    identifiedSourceCount = identifiedSourceCount,
+                    reviewIssueCount = reviewIssueCount,
+                    currentMonthSpendingCents = currentMonthSpendingCents,
+                    currentMonthIncomeCents = currentMonthIncomeCents,
+                    currentMonthRefundCents = currentMonthRefundCents,
+                    currentMonthMovementCents = currentMonthMovementCents,
+                    previousMonthSpendingCents = previousMonthSpendingCents,
+                    currentMonthExpenseCount = currentMonthExpenseCount,
+                    topCategoryLabel = topCategoryLabel,
+                    topMerchantLabel = topMerchantLabel
+                )
+            }
+
+            item {
+                NextActionCard(
+                    rawAlertCount = rawAlertCount,
+                    identifiedSourceCount = identifiedSourceCount,
+                    uncategorizedSourceCount = uncategorizedSourceCount,
+                    transactionCount = transactionCount,
+                    reviewIssueCount = reviewIssueCount,
+                    onOpenSetup = onOpenSetup,
+                    onOpenReviewQueue = onOpenReviewQueue,
+                    onOpenSummary = onOpenSummary
                 )
             }
 
             item {
                 HomeNavCard(
-                    title = "Spending Summary",
-                    description = "View monthly spending totals and category drilldowns.",
-                    buttonText = "Open Summary",
+                    title = "Spending",
+                    description = "Monthly totals, categories, and transaction drilldowns.",
+                    buttonText = "View Spending",
                     onClick = onOpenSummary
                 )
             }
 
             item {
                 HomeNavCard(
-                    title = "Review Queue",
-                    description = "Fix transactions missing merchant, category, or needing review.",
-                    buttonText = "Open Review Queue",
+                    title = "Needs Review",
+                    description = "Only the transactions that need a decision.",
+                    buttonText = "Review Items",
                     onClick = onOpenReviewQueue
                 )
             }
 
             item {
                 HomeNavCard(
-                    title = "Merchant Review",
-                    description = "Assign default categories to merchants/payees like Walmart, Shell, Netflix, or donations.",
-                    buttonText = "Open Merchants",
+                    title = "Merchants",
+                    description = "Set default categories once and let future transactions follow them.",
+                    buttonText = "Review Merchants",
                     onClick = onOpenMerchants
                 )
             }
 
             item {
                 HomeNavCard(
-                    title = "Transactions",
-                    description = "Browse all parsed transactions and inspect parser output.",
-                    buttonText = "Open Transactions",
+                    title = "All Transactions",
+                    description = "Search and inspect the full transaction history.",
+                    buttonText = "Browse",
                     onClick = onOpenTransactions
                 )
             }
 
             item {
                 HomeNavCard(
-                    title = "Sources",
-                    description = "Review SMS senders and classify them as sources or non-sources.",
-                    buttonText = "Open Sources",
-                    onClick = onOpenSources
-                )
-            }
-
-            item {
-                HomeNavCard(
-                    title = "Tools",
-                    description = "Import SMS, detect sources, parse identified sources, and clear test data.",
-                    buttonText = "Open Tools",
+                    title = "Settings",
+                    description = "Manage sources, rules, imports, exports, and maintenance.",
+                    buttonText = "Open Settings",
                     onClick = onOpenTools
                 )
             }
@@ -3563,11 +4856,72 @@ fun HomeScreen(
 }
 
 @Composable
+fun HomeBottomNav(
+    onOpenHome: () -> Unit,
+    onOpenSummary: () -> Unit,
+    onOpenReviewQueue: () -> Unit,
+    onOpenMerchants: () -> Unit,
+    onOpenTransactions: () -> Unit
+) {
+    NavigationBar {
+        NavigationBarItem(
+            selected = true,
+            onClick = onOpenHome,
+            icon = { Text("H") },
+            label = { Text("Home") }
+        )
+        NavigationBarItem(
+            selected = false,
+            onClick = onOpenSummary,
+            icon = { Text("S") },
+            label = { Text("Spend") }
+        )
+        NavigationBarItem(
+            selected = false,
+            onClick = onOpenReviewQueue,
+            icon = { Text("!") },
+            label = { Text("Review") }
+        )
+        NavigationBarItem(
+            selected = false,
+            onClick = onOpenMerchants,
+            icon = { Text("M") },
+            label = { Text("Merchants") }
+        )
+        NavigationBarItem(
+            selected = false,
+            onClick = onOpenTransactions,
+            icon = { Text("T") },
+            label = { Text("Activity") }
+        )
+    }
+}
+
+@Composable
 fun HomeStatusCard(
     rawAlertCount: Int,
     sourceCount: Int,
-    transactionCount: Int
+    transactionCount: Int,
+    activeRuleCount: Int,
+    uncategorizedSourceCount: Int,
+    identifiedSourceCount: Int,
+    reviewIssueCount: Int,
+    currentMonthSpendingCents: Long,
+    currentMonthIncomeCents: Long,
+    currentMonthRefundCents: Long,
+    currentMonthMovementCents: Long,
+    previousMonthSpendingCents: Long,
+    currentMonthExpenseCount: Int,
+    topCategoryLabel: String,
+    topMerchantLabel: String
 ) {
+    val currentMonthSpending = currentMonthSpendingCents / 100.0
+    val currentMonthIncome = currentMonthIncomeCents / 100.0
+    val currentMonthRefunds = currentMonthRefundCents / 100.0
+    val currentMonthMovements = currentMonthMovementCents / 100.0
+    val previousMonthSpending = previousMonthSpendingCents / 100.0
+    val delta = currentMonthSpending - previousMonthSpending
+
     Card(
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -3575,15 +4929,122 @@ fun HomeStatusCard(
             modifier = Modifier.padding(12.dp)
         ) {
             Text(
-                text = "Current Data",
-                style = MaterialTheme.typography.titleMedium
+                text = "$${"%.2f".format(currentMonthSpending)}",
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+
+            Text(
+                text = "${formatMonthYear(getCurrentMonthStartEpochMs())} spending across $currentMonthExpenseCount transactions",
+                style = MaterialTheme.typography.bodyMedium
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Text("Imported SMS alerts: $rawAlertCount")
-            Text("Detected sources: $sourceCount")
-            Text("Parsed transactions: $transactionCount")
+            Text("Previous month: $${"%.2f".format(previousMonthSpending)}")
+            Text("Month change: ${if (delta >= 0) "+" else ""}$${"%.2f".format(delta)}")
+            Text("Income: $${"%.2f".format(currentMonthIncome)}")
+            Text("Refunds: $${"%.2f".format(currentMonthRefunds)}")
+            Text("Payments/transfers: $${"%.2f".format(currentMonthMovements)}")
+            Text("Top category: $topCategoryLabel")
+            Text("Top merchant: $topMerchantLabel")
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text("Imported SMS: $rawAlertCount")
+            Text("Sources: $identifiedSourceCount active ($uncategorizedSourceCount to review)")
+            Text("Transactions: $transactionCount ($reviewIssueCount need attention)")
+            Text("Saved rules: $activeRuleCount")
+        }
+    }
+}
+
+@Composable
+fun NextActionCard(
+    rawAlertCount: Int,
+    identifiedSourceCount: Int,
+    uncategorizedSourceCount: Int,
+    transactionCount: Int,
+    reviewIssueCount: Int,
+    onOpenSetup: () -> Unit,
+    onOpenReviewQueue: () -> Unit,
+    onOpenSummary: () -> Unit
+) {
+    val title: String
+    val description: String
+    val buttonText: String
+    val action: () -> Unit
+
+    when {
+        rawAlertCount == 0 -> {
+            title = "Start with SMS import"
+            description = "Import historical SMS alerts, then detect sender-level financial sources."
+            buttonText = "Start Setup"
+            action = onOpenSetup
+        }
+
+        identifiedSourceCount == 0 -> {
+            title = "Choose financial sources"
+            description = "Confirm at least one bank or card SMS sender so LedgerLens can parse transactions."
+            buttonText = "Continue Setup"
+            action = onOpenSetup
+        }
+
+        uncategorizedSourceCount > 0 -> {
+            title = "Confirm financial sources"
+            description = "$uncategorizedSourceCount sender sources need a decision before they can be parsed."
+            buttonText = "Continue Setup"
+            action = onOpenSetup
+        }
+
+        transactionCount == 0 -> {
+            title = "Parse transactions"
+            description = "Your sources are ready. Parse their SMS alerts to build the spending dashboard."
+            buttonText = "Continue Setup"
+            action = onOpenSetup
+        }
+
+        reviewIssueCount > 0 -> {
+            title = "Clean up transactions"
+            description = "$reviewIssueCount transactions need a merchant, category, or review decision."
+            buttonText = "Open Review Queue"
+            action = onOpenReviewQueue
+        }
+
+        else -> {
+            title = "Dashboard is ready"
+            description = "Your sources, rules, and spending summary are in good shape."
+            buttonText = "View Summary"
+            action = onOpenSummary
+        }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp)
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodyMedium
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Button(
+                onClick = action,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(buttonText)
+            }
         }
     }
 }
@@ -3627,22 +5088,218 @@ fun HomeNavCard(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+fun RulesScreen(
+    rules: List<TransactionRuleEntity>,
+    onBack: () -> Unit,
+    onDisableRule: (TransactionRuleEntity) -> Unit,
+    onDeleteRule: (TransactionRuleEntity) -> Unit
+) {
+    val merchantRules = rules.filter { it.sourceKey == MERCHANT_DEFAULT_RULE_SOURCE_KEY }
+    val phraseRules = rules.filter { it.sourceKey != MERCHANT_DEFAULT_RULE_SOURCE_KEY }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Rules") },
+                navigationIcon = {
+                    TextButton(onClick = onBack) {
+                        Text("Back")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 16.dp),
+            contentPadding = PaddingValues(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            item {
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp)
+                    ) {
+                        Text(
+                            text = "Automation Rules",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Text("Merchant defaults: ${merchantRules.size}")
+                        Text("Phrase/source rules: ${phraseRules.size}")
+                    }
+                }
+            }
+
+            item {
+                SourceSectionHeader(
+                    title = "Merchant Defaults",
+                    count = merchantRules.size
+                )
+            }
+
+            if (merchantRules.isEmpty()) {
+                item {
+                    EmptySectionText("No merchant defaults yet. Assign categories in Merchant Review.")
+                }
+            } else {
+                items(
+                    items = merchantRules,
+                    key = { it.id }
+                ) { rule ->
+                    RuleCard(
+                        rule = rule,
+                        onDisableRule = onDisableRule,
+                        onDeleteRule = onDeleteRule
+                    )
+                }
+            }
+
+            item {
+                SourceSectionHeader(
+                    title = "Phrase Rules",
+                    count = phraseRules.size
+                )
+            }
+
+            if (phraseRules.isEmpty()) {
+                item {
+                    EmptySectionText("No phrase rules yet. Use Transaction Detail to apply fixes to similar SMS.")
+                }
+            } else {
+                items(
+                    items = phraseRules,
+                    key = { it.id }
+                ) { rule ->
+                    RuleCard(
+                        rule = rule,
+                        onDisableRule = onDisableRule,
+                        onDeleteRule = onDeleteRule
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun RuleCard(
+    rule: TransactionRuleEntity,
+    onDisableRule: (TransactionRuleEntity) -> Unit,
+    onDeleteRule: (TransactionRuleEntity) -> Unit
+) {
+    val formatter = remember {
+        SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp)
+        ) {
+            Text(
+                text = rule.merchantName ?: rule.matchPhrase,
+                style = MaterialTheme.typography.titleSmall
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = if (rule.sourceKey == MERCHANT_DEFAULT_RULE_SOURCE_KEY) {
+                    "Merchant default"
+                } else {
+                    "Source phrase: ${rule.sourceKey}"
+                },
+                style = MaterialTheme.typography.labelMedium
+            )
+
+            val details = listOfNotNull(
+                rule.categoryName?.let {
+                    if (rule.subcategoryName.isNullOrBlank()) it else "$it / ${rule.subcategoryName}"
+                },
+                rule.transactionType?.let { treatmentLabel(it) },
+                rule.appliesToTreatment?.let { "Scope: ${treatmentLabel(it)}" },
+                rule.reviewStatus,
+                rule.excludedFromSpending?.let { if (it) "Outside spending" else "Spending" },
+                if (!rule.applyCategoryAutomatically) "No auto category" else null,
+                if (rule.requiresReview) "Requires review" else null
+            )
+
+            if (details.isNotEmpty()) {
+                Text(
+                    text = details.joinToString(" - "),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+
+            Text(
+                text = "Match phrase: ${rule.matchPhrase}",
+                style = MaterialTheme.typography.labelSmall
+            )
+
+            Text(
+                text = "Updated: ${formatter.format(Date(rule.updatedAtEpochMs))}",
+                style = MaterialTheme.typography.labelSmall
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { onDisableRule(rule) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Disable")
+                }
+
+                OutlinedButton(
+                    onClick = { onDeleteRule(rule) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Delete")
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 fun ToolsScreen(
     rawAlertCount: Int,
     sourceCount: Int,
     transactionCount: Int,
+    activeRuleCount: Int,
     statusText: String,
     onBack: () -> Unit,
+    onOpenSources: () -> Unit,
+    onOpenRules: () -> Unit,
     onBackfillSmsHistory: () -> Unit,
     onRefreshLatestSms: () -> Unit,
     onDetectSources: () -> Unit,
     onParseIdentifiedSources: () -> Unit,
+    onReparseTransactions: () -> Unit,
+    onReapplySavedRules: () -> Unit,
+    onExportTransactions: () -> Unit,
+    onExportParserCorpus: () -> Unit,
     onClearAll: () -> Unit
 ) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Tools") },
+                title = { Text("Settings") },
                 navigationIcon = {
                     TextButton(onClick = onBack) {
                         Text("Back")
@@ -3679,8 +5336,27 @@ fun ToolsScreen(
                         Text("Imported SMS: $rawAlertCount")
                         Text("Sources: $sourceCount")
                         Text("Transactions: $transactionCount")
+                        Text("Saved rules: $activeRuleCount")
                     }
                 }
+            }
+
+            item {
+                ToolActionCard(
+                    title = "Source Setup",
+                    description = "Manage SMS senders, source types, and ignored sources.",
+                    buttonText = "Manage Sources",
+                    onClick = onOpenSources
+                )
+            }
+
+            item {
+                ToolActionCard(
+                    title = "Rules",
+                    description = "Review saved merchant defaults and phrase rules.",
+                    buttonText = "Manage Rules",
+                    onClick = onOpenRules
+                )
             }
 
             item {
@@ -3716,6 +5392,42 @@ fun ToolsScreen(
                     description = "Parse transactions only from sources you marked as valid.",
                     buttonText = "Parse Sources",
                     onClick = onParseIdentifiedSources
+                )
+            }
+
+            item {
+                ToolActionCard(
+                    title = "Reparse Transactions",
+                    description = "Clear parsed transactions and rebuild them from identified SMS using current parser and saved rules.",
+                    buttonText = "Reparse Transactions",
+                    onClick = onReparseTransactions
+                )
+            }
+
+            item {
+                ToolActionCard(
+                    title = "Reapply Saved Rules",
+                    description = "Apply saved merchant and phrase rules to transactions that already exist.",
+                    buttonText = "Reapply Rules",
+                    onClick = onReapplySavedRules
+                )
+            }
+
+            item {
+                ToolActionCard(
+                    title = "Export Transactions",
+                    description = "Create a CSV file and open Android sharing so you can save or send your transaction data.",
+                    buttonText = "Export CSV",
+                    onClick = onExportTransactions
+                )
+            }
+
+            item {
+                ToolActionCard(
+                    title = "Export Parser Corpus",
+                    description = "Create a JSONL debugging corpus with raw SMS, parser output, and user corrections for parser tuning.",
+                    buttonText = "Export JSONL",
+                    onClick = onExportParserCorpus
                 )
             }
 
@@ -3797,6 +5509,10 @@ fun MerchantReviewScreen(
     onBack: () -> Unit,
     onMerchantSelected: (MerchantSummary) -> Unit
 ) {
+    var searchText by remember {
+        mutableStateOf("")
+    }
+
     val merchantSummaries = remember(transactions) {
         transactions
             .filter {
@@ -3808,8 +5524,18 @@ fun MerchantReviewScreen(
             }
             .map { (merchantName, group) ->
                 val expenseGroup = group.filter {
-                    it.transactionType == "EXPENSE" && !it.excludedFromSpending
+                    TransactionTreatments.countsAsSpending(
+                        treatment = it.accountingTreatment,
+                        excludedFromSpending = it.excludedFromSpending
+                    )
                 }
+
+                val primaryTreatment = group
+                    .groupingBy { it.accountingTreatment }
+                    .eachCount()
+                    .maxByOrNull { it.value }
+                    ?.key
+                    ?: TransactionTreatments.UNKNOWN
 
                 val categoryPairs = group
                     .mapNotNull { transaction ->
@@ -3831,11 +5557,14 @@ fun MerchantReviewScreen(
                     merchantName = merchantName,
                     transactionCount = group.size,
                     totalAmountCents = expenseGroup.sumOf { it.amountCents },
+                    primaryTreatment = primaryTreatment,
                     categoryName = mostCommonCategory?.first,
                     subcategoryName = mostCommonCategory?.second,
                     uncategorizedCount = group.count {
-                        it.transactionType == "EXPENSE" &&
-                                !it.excludedFromSpending &&
+                        TransactionTreatments.countsAsSpending(
+                            treatment = it.accountingTreatment,
+                            excludedFromSpending = it.excludedFromSpending
+                        ) &&
                                 it.categoryName.isNullOrBlank()
                     },
                     latestTransactionEpochMs = group.maxOf { it.occurredAtEpochMs }
@@ -3849,8 +5578,24 @@ fun MerchantReviewScreen(
             )
     }
 
-    val uncategorizedMerchants = merchantSummaries.filter { it.uncategorizedCount > 0 }
-    val categorizedMerchants = merchantSummaries.filter { it.uncategorizedCount == 0 }
+    val visibleMerchants = remember(merchantSummaries, searchText) {
+        val query = searchText.trim().lowercase(Locale.US)
+        if (query.isBlank()) {
+            merchantSummaries
+        } else {
+            merchantSummaries.filter { merchant ->
+                listOfNotNull(
+                    merchant.merchantName,
+                    merchant.primaryTreatment,
+                    merchant.categoryName,
+                    merchant.subcategoryName
+                ).any { it.lowercase(Locale.US).contains(query) }
+            }
+        }
+    }
+
+    val uncategorizedMerchants = visibleMerchants.filter { it.uncategorizedCount > 0 }
+    val categorizedMerchants = visibleMerchants.filter { it.uncategorizedCount == 0 }
 
     Scaffold(
         topBar = {
@@ -3879,6 +5624,16 @@ fun MerchantReviewScreen(
                     totalMerchants = merchantSummaries.size,
                     uncategorizedMerchants = uncategorizedMerchants.size,
                     categorizedMerchants = categorizedMerchants.size
+                )
+            }
+
+            item {
+                OutlinedTextField(
+                    value = searchText,
+                    onValueChange = { searchText = it },
+                    label = { Text("Search merchants") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
                 )
             }
 
@@ -3957,7 +5712,7 @@ fun MerchantReviewSummaryCard(
             Spacer(modifier = Modifier.height(6.dp))
 
             Text(
-                text = "This groups existing parsed transactions by merchant/payee. Future merchant rules will be added later.",
+                text = "This groups parsed transactions by merchant/payee. Category assignments are saved as merchant defaults for future parses.",
                 style = MaterialTheme.typography.labelSmall
             )
         }
@@ -4000,6 +5755,11 @@ fun MerchantSummaryCard(
                 style = MaterialTheme.typography.labelSmall
             )
 
+            Text(
+                text = "Usual treatment: ${treatmentLabel(merchant.primaryTreatment)}",
+                style = MaterialTheme.typography.labelSmall
+            )
+
             val categoryText = if (merchant.categoryName.isNullOrBlank()) {
                 "No default category"
             } else {
@@ -4035,12 +5795,16 @@ fun MerchantDetailScreen(
     merchant: MerchantSummary,
     transactions: List<TransactionEntity>,
     onBack: () -> Unit,
-    onUpdateMerchantCategory: (String, String) -> Unit,
+    onUpdateMerchantCategory: (String, String, String, Boolean, Boolean) -> Unit,
     onTransactionSelected: (TransactionEntity) -> Unit
 ) {
     val expenseTotal = transactions
-        .filter { it.transactionType == "EXPENSE" }
-        .filter { !it.excludedFromSpending }
+        .filter {
+            TransactionTreatments.countsAsSpending(
+                treatment = it.accountingTreatment,
+                excludedFromSpending = it.excludedFromSpending
+            )
+        }
         .sumOf { it.amountCents }
 
     Scaffold(
@@ -4130,6 +5894,7 @@ fun MerchantDetailSummaryCard(
 
             Text("Transactions: $transactionCount")
             Text("Included expense total: $${"%.2f".format(amount)}")
+            Text("Usual treatment: ${treatmentLabel(merchant.primaryTreatment)}")
             Text("Uncategorized expenses: ${merchant.uncategorizedCount}")
 
             val categoryText = if (merchant.categoryName.isNullOrBlank()) {
@@ -4151,7 +5916,7 @@ fun MerchantDetailSummaryCard(
 @Composable
 fun MerchantCategoryAssignmentCard(
     merchant: MerchantSummary,
-    onUpdateMerchantCategory: (String, String) -> Unit
+    onUpdateMerchantCategory: (String, String, String, Boolean, Boolean) -> Unit
 ) {
     var categoryText by remember(merchant.merchantName, merchant.categoryName) {
         mutableStateOf(merchant.categoryName ?: "")
@@ -4159,6 +5924,18 @@ fun MerchantCategoryAssignmentCard(
 
     var subcategoryText by remember(merchant.merchantName, merchant.subcategoryName) {
         mutableStateOf(merchant.subcategoryName ?: "")
+    }
+
+    var treatmentText by remember(merchant.merchantName, merchant.primaryTreatment) {
+        mutableStateOf(merchant.primaryTreatment)
+    }
+
+    var applyCategoryAutomatically by remember(merchant.merchantName) {
+        mutableStateOf(true)
+    }
+
+    var requiresReview by remember(merchant.merchantName) {
+        mutableStateOf(merchant.primaryTreatment == TransactionTreatments.PERSON_TO_PERSON)
     }
 
     val presets = listOf(
@@ -4198,7 +5975,14 @@ fun MerchantCategoryAssignmentCard(
                             onClick = {
                                 categoryText = preset.first
                                 subcategoryText = preset.second
-                                onUpdateMerchantCategory(categoryText, subcategoryText)
+                                treatmentText = TransactionTreatments.EXPENSE
+                                onUpdateMerchantCategory(
+                                    categoryText,
+                                    subcategoryText,
+                                    treatmentText,
+                                    applyCategoryAutomatically,
+                                    requiresReview
+                                )
                             },
                             modifier = Modifier.weight(1f)
                         ) {
@@ -4212,6 +5996,67 @@ fun MerchantCategoryAssignmentCard(
                 }
 
                 Spacer(modifier = Modifier.height(6.dp))
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Accounting treatment",
+                style = MaterialTheme.typography.titleSmall
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            listOf(
+                listOf(TransactionTreatments.EXPENSE, TransactionTreatments.INCOME),
+                listOf(TransactionTreatments.REFUND, TransactionTreatments.CREDIT_CARD_PAYMENT),
+                listOf(TransactionTreatments.TRANSFER, TransactionTreatments.PERSON_TO_PERSON)
+            ).forEach { rowItems ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    rowItems.forEach { treatment ->
+                        TreatmentChoiceButton(
+                            treatment = treatment,
+                            selected = treatmentText == treatment,
+                            onClick = { treatmentText = treatment },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Checkbox(
+                    checked = applyCategoryAutomatically,
+                    onCheckedChange = { applyCategoryAutomatically = it }
+                )
+                Text(
+                    text = "Apply this category automatically",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Checkbox(
+                    checked = requiresReview,
+                    onCheckedChange = { requiresReview = it }
+                )
+                Text(
+                    text = "Keep future matches in review",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f)
+                )
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -4238,19 +6083,50 @@ fun MerchantCategoryAssignmentCard(
 
             Button(
                 onClick = {
-                    onUpdateMerchantCategory(categoryText, subcategoryText)
+                    onUpdateMerchantCategory(
+                        categoryText,
+                        subcategoryText,
+                        treatmentText,
+                        applyCategoryAutomatically,
+                        requiresReview
+                    )
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Apply to Existing Merchant Transactions")
+                Text("Save Merchant Default")
             }
 
             Spacer(modifier = Modifier.height(6.dp))
 
             Text(
-                text = "For now, this updates existing transactions for this merchant. Future merchant default rules will be added later.",
+                text = "This updates existing transactions and saves a merchant default for future parsed SMS.",
                 style = MaterialTheme.typography.labelSmall
             )
+        }
+    }
+}
+
+@Composable
+fun TreatmentChoiceButton(
+    treatment: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val label = treatmentLabel(treatment)
+    if (selected) {
+        Button(
+            onClick = onClick,
+            modifier = modifier
+        ) {
+            Text(label)
+        }
+    } else {
+        OutlinedButton(
+            onClick = onClick,
+            modifier = modifier
+        ) {
+            Text(label)
         }
     }
 }
@@ -4275,7 +6151,7 @@ fun MerchantTransactionCard(
             modifier = Modifier.padding(12.dp)
         ) {
             Text(
-                text = "$${"%.2f".format(amount)} • ${transaction.transactionType}",
+                text = "$${"%.2f".format(amount)} • ${treatmentLabel(transaction.accountingTreatment)}",
                 style = MaterialTheme.typography.bodyLarge
             )
 

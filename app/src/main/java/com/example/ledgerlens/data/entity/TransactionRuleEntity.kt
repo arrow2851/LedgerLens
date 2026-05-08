@@ -29,6 +29,9 @@ data class TransactionRuleEntity(
     val transactionType: String? = null,
     val reviewStatus: String? = null,
     val excludedFromSpending: Boolean? = null,
+    val appliesToTreatment: String? = null,
+    val applyCategoryAutomatically: Boolean = true,
+    val requiresReview: Boolean = false,
 
     val active: Boolean = true,
 

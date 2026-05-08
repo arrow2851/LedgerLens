@@ -45,25 +45,21 @@ interface TransactionRuleDao {
     @Query("SELECT COUNT(*) FROM transaction_rules WHERE active = 1")
     fun observeActiveRuleCount(): Flow<Int>
 
-    @Query("DELETE FROM transaction_rules")
-    suspend fun deleteAll()
-
     @Query("""
-    UPDATE transactions
-    SET
-        categoryName = :categoryName,
-        subcategoryName = :subcategoryName,
-        transactionType = 'EXPENSE',
-        reviewStatus = 'REVIEWED',
-        excludedFromSpending = 0,
-        updatedAtEpochMs = :updatedAtEpochMs
-    WHERE LOWER(COALESCE(displayMerchantName, merchantRaw, '')) = LOWER(:merchantName)
-      AND transactionType NOT IN ('TRANSFER', 'CREDIT_CARD_PAYMENT', 'INCOME', 'REFUND')
-""")
-    suspend fun updateMerchantCategoryAndMarkEligibleAsExpense(
-        merchantName: String,
-        categoryName: String?,
-        subcategoryName: String?,
+        UPDATE transaction_rules
+        SET active = :active,
+            updatedAtEpochMs = :updatedAtEpochMs
+        WHERE id = :ruleId
+    """)
+    suspend fun setRuleActive(
+        ruleId: Long,
+        active: Boolean,
         updatedAtEpochMs: Long
     ): Int
+
+    @Query("DELETE FROM transaction_rules WHERE id = :ruleId")
+    suspend fun deleteById(ruleId: Long): Int
+
+    @Query("DELETE FROM transaction_rules")
+    suspend fun deleteAll()
 }

@@ -22,7 +22,7 @@ import com.example.ledgerlens.data.entity.TransactionRuleEntity
         FinancialSourceEntity::class,
         TransactionRuleEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -137,6 +137,19 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE transactions ADD COLUMN accountingTreatment TEXT NOT NULL DEFAULT 'UNKNOWN'")
+                db.execSQL("UPDATE transactions SET accountingTreatment = transactionType WHERE accountingTreatment = 'UNKNOWN'")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN merchantUserEdited INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN categoryUserEdited INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN treatmentUserEdited INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE transaction_rules ADD COLUMN appliesToTreatment TEXT")
+                db.execSQL("ALTER TABLE transaction_rules ADD COLUMN applyCategoryAutomatically INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE transaction_rules ADD COLUMN requiresReview INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -144,7 +157,13 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "ledgerlens.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(
+                        MIGRATION_1_2,
+                        MIGRATION_2_3,
+                        MIGRATION_3_4,
+                        MIGRATION_4_5,
+                        MIGRATION_5_6
+                    )
                     .build()
                     .also { INSTANCE = it }
             }

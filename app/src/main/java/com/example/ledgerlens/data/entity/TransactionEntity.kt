@@ -18,6 +18,7 @@ data class TransactionEntity(
     val sourceKey: String,
 
     val transactionType: String,
+    val accountingTreatment: String = transactionType,
     val amountCents: Long,
     val currency: String = "USD",
 
@@ -36,6 +37,10 @@ data class TransactionEntity(
     val excludedFromSpending: Boolean = false,
 
     val parserNotes: String? = null,
+
+    val merchantUserEdited: Boolean = false,
+    val categoryUserEdited: Boolean = false,
+    val treatmentUserEdited: Boolean = false,
 
     val createdAtEpochMs: Long,
     val updatedAtEpochMs: Long,

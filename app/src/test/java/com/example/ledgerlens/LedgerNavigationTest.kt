@@ -28,13 +28,11 @@ class LedgerNavigationTest {
         assertEquals(LedgerNavDestination.MORE, navDestinationForScreen(AppScreen.SOURCES))
         assertEquals(LedgerNavDestination.MORE, navDestinationForScreen(AppScreen.RULES))
         assertEquals(LedgerNavDestination.MORE, navDestinationForScreen(AppScreen.MERCHANTS))
-        assertEquals(LedgerNavDestination.MORE, navDestinationForScreen(AppScreen.SETUP))
     }
 
     @Test
     fun primaryScreensSelectExpectedBottomNavItems() {
         assertEquals(LedgerNavDestination.SPENDING, navDestinationForScreen(AppScreen.SUMMARY))
-        assertEquals(LedgerNavDestination.SPENDING, navDestinationForScreen(AppScreen.HOME))
         assertEquals(LedgerNavDestination.REVIEW, navDestinationForScreen(AppScreen.REVIEW_QUEUE))
         assertEquals(LedgerNavDestination.ACTIVITY, navDestinationForScreen(AppScreen.TRANSACTIONS))
     }

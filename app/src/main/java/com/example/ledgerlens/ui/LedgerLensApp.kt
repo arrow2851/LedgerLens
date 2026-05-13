@@ -1,7 +1,6 @@
 package com.example.ledgerlens.ui
 
 import androidx.compose.runtime.Composable
-import com.example.ledgerlens.LedgerLensSourceSetupApp
 import com.example.ledgerlens.data.AppDatabase
 
 @Composable

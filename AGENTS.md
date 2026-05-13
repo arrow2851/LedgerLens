@@ -2,26 +2,26 @@
 
 ## Read First
 
-- Read `CODEX_HANDOFF.md` before making product or architecture changes.
+- Read `CODEX_HANDOFF.md` before making product, UX, or architecture changes.
 - Keep this file short and durable. Put evolving product detail in `CODEX_HANDOFF.md`.
 - Current Android package/namespace is `com.example.ledgerlens`; do not rename it unless explicitly asked.
-- LedgerLens is a personal/local Android app, not currently optimized for Play Store release.
+- LedgerLens is a personal/local Android app. It is not optimized for Play Store release yet, but it should still be polished and maintainable.
 
 ## Project Shape
 
 - Android app module: `app`
 - Main package: `app/src/main/java/com/example/ledgerlens`
 - Current stack: Kotlin, Jetpack Compose, Room, KSP
-- Current UI is mostly in `MainActivity.kt`; data lives under `data`, parser/source logic under `domain`.
+- `MainActivity` should stay thin: Android permission, SMS import entry points, export/share entry points, and `setContent`.
+- Compose UI should live under `ui`, organized by workflow or reusable component.
+- Data lives under `data`; parser/source/rule/export/business logic lives under `domain`.
 
 ## Build And Test
 
-- Sync/build from Android Studio, or run:
-  - `./gradlew :app:assembleDebug`
-  - On Windows PowerShell: `.\gradlew.bat :app:assembleDebug`
+- Build debug APK:
+  - `.\gradlew.bat :app:assembleDebug`
 - Run unit tests:
-  - `./gradlew :app:testDebugUnitTest`
-  - On Windows PowerShell: `.\gradlew.bat :app:testDebugUnitTest`
+  - `.\gradlew.bat :app:testDebugUnitTest`
 - If Room schema changes, verify migrations and run a debug build.
 
 ## Product Constraints
@@ -37,44 +37,31 @@
 
 ## Spending Rules
 
-- Spending Summary should include actual spending only:
+- Spending views include actual spending only:
   - `transactionType == EXPENSE`
   - `excludedFromSpending == false`
-- Credit card payments should default to transfer/payment treatment and be excluded from spending totals.
-- Transfers, balance alerts, payment confirmations, income, refunds, and manually excluded transactions should not inflate spending totals.
+- Credit card payments default to transfer/payment treatment and are excluded from spending totals.
+- Transfers, balance alerts, payment confirmations, income, refunds, and manually excluded transactions must not inflate spending totals.
 - Zelle/Venmo-like transactions should be conservative and usually require review.
-
-## Data And Room
-
-- Important entities: `RawAlertEntity`, `FinancialSourceEntity`, `TransactionEntity`, `TransactionRuleEntity`.
-- Important DAOs: `RawAlertDao`, `FinancialSourceDao`, `TransactionDao`, `TransactionRuleDao`.
-- When changing Room schema:
-  - Update the entity.
-  - Bump the database version.
-  - Add a proper migration.
-  - Update DAOs/call sites as needed.
-- Do not use destructive migrations unless explicitly requested.
 
 ## UX Direction
 
-- Keep setup/debug actions in Tools.
-- Main workflows should stay clear:
-  - Home
-  - Spending Summary
-  - Review Queue
-  - Merchant Review
-  - Transactions
-  - Sources
-  - Tools
+- The mockup direction is the source of truth for product shape:
+  - `Spending`
+  - `Review`
+  - `Activity`
+  - `More`
+- Main flows should feel like a focused personal finance app, not a debug console.
+- Setup, source management, parser diagnostics, imports, exports, and repair tools belong under `More` or deeper maintenance screens.
 - Prefer merchant-level categorization over transaction-by-transaction fixes.
-- Transaction Detail can keep correction/debug tools for parser validation and exceptions.
-- Avoid adding more clutter to already dense screens unless the task explicitly asks for it.
+- Transaction Detail should expose editable user-facing fields first; parser/debug details should be collapsed or moved deeper.
+- Do not keep replaced legacy screens hidden under alternate routes. Either migrate them into the new IA, rename them as tools, or remove them.
 
 ## Development Style
 
-- Make small, targeted changes.
-- Preserve working behavior.
-- Do not remove WIP correction tools unless asked.
-- Prefer existing project patterns over new abstractions.
-- Before large refactors, inspect current files because recent changes may have duplicate helpers, stale UI, or mismatched signatures.
+- Preserve durable data behavior and parser safety rules.
+- Refactor when it improves clarity, separation of concerns, or alignment with the mockups.
+- Keep changes coherent and reviewable, but do not avoid larger architecture work when the task explicitly calls for it.
+- Prefer existing project patterns where they still fit; improve patterns that are causing clutter or duplication.
+- Do not use destructive Room migrations unless explicitly requested.
 - After code changes, summarize files changed, behavior changed, and how to test in Android Studio.

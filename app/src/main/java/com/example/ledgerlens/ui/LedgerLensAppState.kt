@@ -1,8 +1,6 @@
 package com.example.ledgerlens.ui
 
 enum class AppScreen {
-    HOME,
-    SETUP,
     SOURCES,
     TRANSACTIONS,
     SUMMARY,
@@ -25,11 +23,9 @@ enum class LedgerNavDestination(
 
 fun navDestinationForScreen(screen: AppScreen): LedgerNavDestination {
     return when (screen) {
-        AppScreen.SUMMARY,
-        AppScreen.HOME -> LedgerNavDestination.SPENDING
+        AppScreen.SUMMARY -> LedgerNavDestination.SPENDING
         AppScreen.REVIEW_QUEUE -> LedgerNavDestination.REVIEW
         AppScreen.TRANSACTIONS -> LedgerNavDestination.ACTIVITY
-        AppScreen.SETUP,
         AppScreen.SOURCES,
         AppScreen.MERCHANTS,
         AppScreen.RULES,

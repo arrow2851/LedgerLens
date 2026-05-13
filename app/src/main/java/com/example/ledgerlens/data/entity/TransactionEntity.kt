@@ -24,6 +24,7 @@ data class TransactionEntity(
 
     val merchantRaw: String?,
     val displayMerchantName: String?,
+    val spendingMerchantName: String? = null,
 
     val sourceInstitution: String?,
     val accountHint: String?,
@@ -46,5 +47,4 @@ data class TransactionEntity(
     val updatedAtEpochMs: Long,
 
     val categoryName: String? = null,
-    val subcategoryName: String? = null,
 )

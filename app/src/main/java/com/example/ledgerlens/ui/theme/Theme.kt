@@ -16,7 +16,8 @@ private val DarkColorScheme = darkColorScheme(
     secondary = LedgerBlue80,
     tertiary = LedgerGold80,
     background = LedgerDarkBackground,
-    surface = LedgerDarkSurface
+    surface = LedgerDarkSurface,
+    surfaceVariant = LedgerDarkSurfaceVariant
 )
 
 private val LightColorScheme = lightColorScheme(
@@ -24,14 +25,16 @@ private val LightColorScheme = lightColorScheme(
     secondary = LedgerBlue40,
     tertiary = LedgerGold40,
     background = LedgerBackground,
-    surface = LedgerSurface
+    surface = LedgerSurface,
+    surfaceVariant = LedgerSurfaceVariant,
+    outline = LedgerOutline
 )
 
 @Composable
 fun LedgerLensTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = false,
     // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {

@@ -153,7 +153,6 @@ interface TransactionDao {
     UPDATE transactions
     SET
         categoryName = :categoryName,
-        subcategoryName = :subcategoryName,
         categoryUserEdited = 1,
         updatedAtEpochMs = :updatedAtEpochMs
     WHERE id = :transactionId
@@ -161,7 +160,6 @@ interface TransactionDao {
     suspend fun updateCategory(
         transactionId: Long,
         categoryName: String?,
-        subcategoryName: String?,
         updatedAtEpochMs: Long
     )
 
@@ -169,15 +167,29 @@ interface TransactionDao {
     UPDATE transactions
     SET
         categoryName = :categoryName,
-        subcategoryName = :subcategoryName,
+        spendingMerchantName = :spendingMerchantName,
+        categoryUserEdited = 1,
         updatedAtEpochMs = :updatedAtEpochMs
-    WHERE LOWER(COALESCE(displayMerchantName, merchantRaw, '')) = LOWER(:merchantName)
+    WHERE id = :transactionId
+""")
+    suspend fun updateSpendingAttribution(
+        transactionId: Long,
+        categoryName: String?,
+        spendingMerchantName: String?,
+        updatedAtEpochMs: Long
+    )
+
+    @Query("""
+    UPDATE transactions
+    SET
+        categoryName = :categoryName,
+        updatedAtEpochMs = :updatedAtEpochMs
+    WHERE LOWER(COALESCE(spendingMerchantName, displayMerchantName, merchantRaw, '')) = LOWER(:merchantName)
       AND categoryUserEdited = 0
 """)
     suspend fun updateCategoryForMerchantName(
         merchantName: String,
         categoryName: String?,
-        subcategoryName: String?,
         updatedAtEpochMs: Long
     ): Int
 
@@ -188,7 +200,7 @@ interface TransactionDao {
         accountingTreatment = :accountingTreatment,
         excludedFromSpending = :excludedFromSpending,
         updatedAtEpochMs = :updatedAtEpochMs
-    WHERE LOWER(COALESCE(displayMerchantName, merchantRaw, '')) = LOWER(:merchantName)
+    WHERE LOWER(COALESCE(spendingMerchantName, displayMerchantName, merchantRaw, '')) = LOWER(:merchantName)
       AND treatmentUserEdited = 0
 """)
     suspend fun updateTreatmentForMerchantName(
@@ -202,7 +214,6 @@ interface TransactionDao {
     UPDATE transactions
     SET
         categoryName = :categoryName,
-        subcategoryName = :subcategoryName,
         updatedAtEpochMs = :updatedAtEpochMs
     WHERE sourceKey = :sourceKey
       AND categoryUserEdited = 0
@@ -216,7 +227,6 @@ interface TransactionDao {
         sourceKey: String,
         likePattern: String,
         categoryName: String?,
-        subcategoryName: String?,
         updatedAtEpochMs: Long
     ): Int
 }

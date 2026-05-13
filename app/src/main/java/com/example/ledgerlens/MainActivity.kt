@@ -7,9 +7,11 @@ import android.os.Bundle
 import android.os.Environment
 import android.provider.Telephony
 import android.util.Log
+import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -18,25 +20,29 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -45,7 +51,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -54,6 +63,14 @@ import com.example.ledgerlens.data.entity.FinancialSourceEntity
 import com.example.ledgerlens.data.entity.RawAlertEntity
 import com.example.ledgerlens.domain.source.SourceDetector
 import com.example.ledgerlens.domain.TransactionTreatments
+import com.example.ledgerlens.domain.export.buildParserCorpusJsonl
+import com.example.ledgerlens.domain.export.buildTransactionsCsv
+import com.example.ledgerlens.domain.merchants.applyMerchantCategoryBulk
+import com.example.ledgerlens.domain.parser.ParseRunResult
+import com.example.ledgerlens.domain.parser.detectAndSaveSources
+import com.example.ledgerlens.domain.parser.parseIdentifiedSourceTransactions
+import com.example.ledgerlens.domain.parser.reapplySavedRulesToExistingTransactions
+import com.example.ledgerlens.domain.parser.updateRawAlertStatusesForSource
 import com.example.ledgerlens.ui.theme.LedgerLensTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -62,15 +79,65 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import com.example.ledgerlens.domain.parser.SmsTransactionParser
 import com.example.ledgerlens.data.entity.TransactionEntity
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.mutableLongStateOf
-import java.util.Calendar
 import com.example.ledgerlens.data.entity.TransactionRuleEntity
+import com.example.ledgerlens.domain.rules.MERCHANT_DEFAULT_RULE_SOURCE_KEY
+import com.example.ledgerlens.domain.rules.MerchantAliasApplyResult
+import com.example.ledgerlens.domain.rules.MerchantAliasRuleDraft
+import com.example.ledgerlens.domain.rules.applyMerchantAliasRuleToTransaction
+import com.example.ledgerlens.domain.rules.buildMerchantAliasRules
+import com.example.ledgerlens.domain.rules.normalizeRulePhrase
+import com.example.ledgerlens.domain.rules.normalizeAliasText
+import com.example.ledgerlens.domain.rules.previewMerchantAliasRule
+import com.example.ledgerlens.domain.summary.CategorySpendSummary
+import com.example.ledgerlens.domain.summary.MerchantSummary
+import com.example.ledgerlens.domain.summary.categorySpendSummaries
+import com.example.ledgerlens.domain.summary.displayCategoryName
+import com.example.ledgerlens.domain.summary.expenseTransactionsForRange
+import com.example.ledgerlens.domain.summary.formatMonthYear
+import com.example.ledgerlens.domain.summary.getCurrentMonthStartEpochMs
+import com.example.ledgerlens.domain.summary.getNextMonthStartEpochMs
+import com.example.ledgerlens.domain.summary.getPreviousMonthStartEpochMs
+import com.example.ledgerlens.domain.summary.hasAnyReviewIssue
+import com.example.ledgerlens.domain.summary.hasLowConfidence
+import com.example.ledgerlens.domain.summary.hasMissingCategory
+import com.example.ledgerlens.domain.summary.hasMissingMerchant
+import com.example.ledgerlens.domain.summary.isVirtualUncategorizedCategory
+import com.example.ledgerlens.domain.summary.merchantSummaries
+import com.example.ledgerlens.domain.summary.merchantSummaryName
+import com.example.ledgerlens.domain.summary.treatmentLabel
+import com.example.ledgerlens.ui.components.CategoryBarRow
+import com.example.ledgerlens.ui.components.FinanceHeroCard
+import com.example.ledgerlens.ui.components.InlineInfoPanel
+import com.example.ledgerlens.ui.components.LedgerAppScaffold
+import com.example.ledgerlens.ui.components.LedgerBottomNav
+import com.example.ledgerlens.ui.components.LedgerListRow
+import com.example.ledgerlens.ui.components.ListSectionHeader
+import com.example.ledgerlens.ui.components.MetricTile
+import com.example.ledgerlens.ui.components.MetricPanel
+import com.example.ledgerlens.ui.components.MiniTrendStrip
+import com.example.ledgerlens.ui.components.QuickActionItem
+import com.example.ledgerlens.ui.components.QuickActionSheet
+import com.example.ledgerlens.ui.components.StatStrip
+import com.example.ledgerlens.ui.components.StatStripItem
+import com.example.ledgerlens.ui.components.TreatmentSelector
+import com.example.ledgerlens.ui.components.TreatmentChip
+import com.example.ledgerlens.ui.AppScreen
+import com.example.ledgerlens.ui.LedgerBackAction
+import com.example.ledgerlens.ui.LedgerLensApp
+import com.example.ledgerlens.ui.ReviewQueueFilter
+import com.example.ledgerlens.ui.TransactionFilter
+import com.example.ledgerlens.ui.resolveLedgerBackAction
+import com.example.ledgerlens.ui.merchants.MerchantReviewScreen as MerchantReviewInboxScreen
+import com.example.ledgerlens.ui.rules.ParserRuleEditorSheet
 import java.io.File
 
-private const val MERCHANT_DEFAULT_RULE_SOURCE_KEY = "__merchant_defaults__"
+fun formatSignedMoney(cents: Long): String {
+    val sign = if (cents < 0) "-" else ""
+    return "$sign${'$'}${"%.2f".format(Locale.US, kotlin.math.abs(cents) / 100.0)}"
+}
 
 class MainActivity : ComponentActivity() {
 
@@ -94,7 +161,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             LedgerLensTheme(dynamicColor = false) {
-                LedgerLensSourceSetupApp(
+                LedgerLensApp(
                     database = database,
                     onBackfillSmsHistory = {
                         requestSmsImport(SmsImportMode.BACKFILL_HISTORY)
@@ -354,65 +421,87 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-data class CategorySpendSummary(
-    val categoryName: String,
-    val subcategoryName: String?,
-    val amountCents: Long,
-    val transactionCount: Int
-)
-
-data class ParseRunResult(
-    val matchedAlertCount: Int,
-    val parsedCount: Int,
-    val skippedCount: Int,
-    val ignoredNonTransactionCount: Int,
-    val failedCount: Int
-)
-
 enum class SmsImportMode {
     BACKFILL_HISTORY,
     REFRESH_LATEST
 }
 
-enum class AppScreen {
-    HOME,
-    SETUP,
-    SOURCES,
-    TRANSACTIONS,
-    SUMMARY,
-    REVIEW_QUEUE,
-    MERCHANTS,
-    RULES,
-    TOOLS
-}
-
-enum class ReviewQueueFilter {
-    ALL_ISSUES,
-    NEEDS_REVIEW,
-    MISSING_MERCHANT,
-    MISSING_CATEGORY,
-    LOW_CONFIDENCE
-}
-
-enum class TransactionFilter {
-    ALL,
-    NEEDS_REVIEW,
-    EXPENSES,
-    TRANSFERS,
-    CREDIT_CARD_PAYMENTS,
-    EXCLUDED_FROM_SPENDING
-}
-
-data class MerchantSummary(
-    val merchantName: String,
-    val transactionCount: Int,
-    val totalAmountCents: Long,
-    val primaryTreatment: String,
-    val categoryName: String?,
-    val subcategoryName: String?,
-    val uncategorizedCount: Int,
-    val latestTransactionEpochMs: Long
+data class ParserRuleEditorRequest(
+    val title: String,
+    val draft: MerchantAliasRuleDraft,
+    val replaceRuleId: Long? = null
 )
+
+fun buildMerchantAliasDraftForTransaction(
+    transaction: TransactionEntity,
+    rawAlert: RawAlertEntity?,
+    allTransactions: List<TransactionEntity>,
+    includeCategory: Boolean = false,
+    includeTreatment: Boolean = false
+): MerchantAliasRuleDraft {
+    val currentMerchant = transaction.displayMerchantName
+        ?: transaction.merchantRaw
+        ?: transaction.sourceInstitution
+        ?: ""
+    val normalizedSeed = normalizeAliasText(currentMerchant)
+    val alphaSeed = normalizedSeed.takeWhile { it.isLetter() }
+
+    val siblingAliases = if (alphaSeed.length >= 4) {
+        allTransactions
+            .asSequence()
+            .filter { it.sourceKey == transaction.sourceKey }
+            .mapNotNull { it.displayMerchantName ?: it.merchantRaw }
+            .filter { merchant ->
+                val normalized = normalizeAliasText(merchant)
+                normalized.startsWith(alphaSeed.take(6)) ||
+                        alphaSeed.startsWith(normalized.takeWhile { it.isLetter() }.take(6))
+            }
+            .toList()
+    } else {
+        emptyList()
+    }
+
+    val aliases = buildList {
+        transaction.merchantRaw?.takeIf { it.isNotBlank() }?.let { add(it) }
+        transaction.displayMerchantName?.takeIf { it.isNotBlank() }?.let { add(it) }
+        rawAlert?.combinedText
+            ?.split(" ", "\n", "\t")
+            ?.windowed(size = 2, step = 1, partialWindows = true)
+            ?.map { it.joinToString(" ").trim() }
+            ?.filter { normalizeAliasText(it).contains(normalizedSeed.take(6)) && it.length <= 40 }
+            ?.take(2)
+            ?.let { addAll(it) }
+        addAll(siblingAliases)
+    }
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .distinctBy { normalizeAliasText(it) }
+
+    return MerchantAliasRuleDraft(
+        sourceKey = transaction.sourceKey,
+        canonicalMerchantName = currentMerchant,
+        aliases = aliases.ifEmpty { listOf(currentMerchant) },
+        applyCategory = includeCategory && !transaction.categoryName.isNullOrBlank(),
+        categoryName = transaction.categoryName,
+        applyTreatment = includeTreatment,
+        transactionType = transaction.accountingTreatment,
+        requiresReview = transaction.reviewStatus == "NEEDS_REVIEW"
+    )
+}
+
+fun buildMerchantAliasDraftForRule(rule: TransactionRuleEntity): MerchantAliasRuleDraft {
+    return MerchantAliasRuleDraft(
+        sourceKey = rule.sourceKey,
+        canonicalMerchantName = rule.merchantName ?: "",
+        aliases = listOf(rule.matchPhrase),
+        applyCategory = rule.applyCategoryAutomatically && !rule.categoryName.isNullOrBlank(),
+        categoryName = rule.categoryName,
+        applyTreatment = !rule.transactionType.isNullOrBlank(),
+        transactionType = rule.transactionType,
+        requiresReview = rule.requiresReview,
+        active = rule.active
+    )
+}
 
 @Composable
 fun LedgerLensSourceSetupApp(
@@ -473,7 +562,7 @@ fun LedgerLensSourceSetupApp(
     }
 
     var activeScreen by remember {
-        mutableStateOf(AppScreen.HOME)
+        mutableStateOf(AppScreen.SUMMARY)
     }
 
     var selectedTransaction by remember {
@@ -482,6 +571,37 @@ fun LedgerLensSourceSetupApp(
 
     var selectedMerchant by remember {
         mutableStateOf<MerchantSummary?>(null)
+    }
+
+    var showQuickActions by remember {
+        mutableStateOf(false)
+    }
+
+    var parserRuleEditorRequest by remember {
+        mutableStateOf<ParserRuleEditorRequest?>(null)
+    }
+
+    val backAction = resolveLedgerBackAction(
+        showSheet = showQuickActions || parserRuleEditorRequest != null,
+        hasSelectedTransaction = selectedTransaction != null,
+        hasSelectedSource = selectedSource != null,
+        hasSelectedMerchant = selectedMerchant != null,
+        activeScreen = activeScreen
+    )
+
+    BackHandler(enabled = backAction != LedgerBackAction.EXIT_APP) {
+        when (backAction) {
+            LedgerBackAction.DISMISS_SHEET -> {
+                showQuickActions = false
+                parserRuleEditorRequest = null
+            }
+            LedgerBackAction.CLOSE_TRANSACTION_DETAIL -> selectedTransaction = null
+            LedgerBackAction.CLOSE_SOURCE_DETAIL -> selectedSource = null
+            LedgerBackAction.CLOSE_MERCHANT_DETAIL -> selectedMerchant = null
+            LedgerBackAction.GO_REVIEW -> activeScreen = AppScreen.REVIEW_QUEUE
+            LedgerBackAction.GO_SPENDING -> activeScreen = AppScreen.SUMMARY
+            LedgerBackAction.EXIT_APP -> Unit
+        }
     }
 
     val selectedSourceAlerts = remember(selectedSource, rawAlerts) {
@@ -510,7 +630,7 @@ fun LedgerLensSourceSetupApp(
 
         transactions
             .filter {
-                TransactionTreatments.countsAsSpending(
+                TransactionTreatments.isInSpendingView(
                     treatment = it.accountingTreatment,
                     excludedFromSpending = it.excludedFromSpending
                 )
@@ -522,8 +642,23 @@ fun LedgerLensSourceSetupApp(
     }
 
     val currentMonthSpendingCents = remember(currentMonthExpenses) {
+        currentMonthExpenses.sumOf {
+            TransactionTreatments.spendingImpactCents(
+                treatment = it.accountingTreatment,
+                excludedFromSpending = it.excludedFromSpending,
+                amountCents = it.amountCents
+            )
+        }
+    }
+
+    val currentMonthGrossExpenseCents = remember(currentMonthExpenses) {
         currentMonthExpenses
+            .filter { it.accountingTreatment == TransactionTreatments.EXPENSE }
             .sumOf { it.amountCents }
+    }
+
+    val currentMonthCategorySummaries = remember(currentMonthExpenses) {
+        categorySpendSummaries(currentMonthExpenses).take(4)
     }
 
     val currentMonthActivity = remember(transactions) {
@@ -548,6 +683,12 @@ fun LedgerLensSourceSetupApp(
             .sumOf { it.amountCents }
     }
 
+    val currentMonthReimbursementCents = remember(currentMonthActivity) {
+        currentMonthActivity
+            .filter { it.accountingTreatment == TransactionTreatments.REIMBURSEMENT }
+            .sumOf { it.amountCents }
+    }
+
     val currentMonthMovementCents = remember(currentMonthActivity) {
         currentMonthActivity
             .filter {
@@ -566,7 +707,7 @@ fun LedgerLensSourceSetupApp(
 
         transactions
             .filter {
-                TransactionTreatments.countsAsSpending(
+                TransactionTreatments.isInSpendingView(
                     treatment = it.accountingTreatment,
                     excludedFromSpending = it.excludedFromSpending
                 )
@@ -575,25 +716,70 @@ fun LedgerLensSourceSetupApp(
                 it.occurredAtEpochMs >= previousMonthStart &&
                         it.occurredAtEpochMs < currentMonthStart
             }
-            .sumOf { it.amountCents }
+            .sumOf {
+                TransactionTreatments.spendingImpactCents(
+                    treatment = it.accountingTreatment,
+                    excludedFromSpending = it.excludedFromSpending,
+                    amountCents = it.amountCents
+                )
+            }
     }
 
     val topCategoryLabel = remember(currentMonthExpenses) {
         currentMonthExpenses
-            .groupBy { it.categoryName?.takeIf { category -> category.isNotBlank() } ?: "Unassigned" }
-            .maxByOrNull { entry -> entry.value.sumOf { it.amountCents } }
+            .groupBy { displayCategoryName(it.categoryName) }
+            .maxByOrNull { entry ->
+                kotlin.math.abs(
+                    entry.value.sumOf {
+                        TransactionTreatments.spendingImpactCents(
+                            treatment = it.accountingTreatment,
+                            excludedFromSpending = it.excludedFromSpending,
+                            amountCents = it.amountCents
+                        )
+                    }
+                )
+            }
             ?.let { entry ->
-                "${entry.key} - $${"%.2f".format(entry.value.sumOf { it.amountCents } / 100.0)}"
+                val impact = entry.value.sumOf {
+                    TransactionTreatments.spendingImpactCents(
+                        treatment = it.accountingTreatment,
+                        excludedFromSpending = it.excludedFromSpending,
+                        amountCents = it.amountCents
+                    )
+                }
+                "${entry.key} - ${formatSignedMoney(impact)}"
             }
             ?: "No spending yet"
     }
 
     val topMerchantLabel = remember(currentMonthExpenses) {
         currentMonthExpenses
-            .groupBy { it.displayMerchantName ?: it.merchantRaw ?: "Unknown merchant" }
-            .maxByOrNull { entry -> entry.value.sumOf { it.amountCents } }
+            .groupBy {
+                it.spendingMerchantName?.takeIf { merchant -> merchant.isNotBlank() }
+                    ?: it.displayMerchantName
+                    ?: it.merchantRaw
+                    ?: "Unknown merchant"
+            }
+            .maxByOrNull { entry ->
+                kotlin.math.abs(
+                    entry.value.sumOf {
+                        TransactionTreatments.spendingImpactCents(
+                            treatment = it.accountingTreatment,
+                            excludedFromSpending = it.excludedFromSpending,
+                            amountCents = it.amountCents
+                        )
+                    }
+                )
+            }
             ?.let { entry ->
-                "${entry.key} - $${"%.2f".format(entry.value.sumOf { it.amountCents } / 100.0)}"
+                val impact = entry.value.sumOf {
+                    TransactionTreatments.spendingImpactCents(
+                        treatment = it.accountingTreatment,
+                        excludedFromSpending = it.excludedFromSpending,
+                        amountCents = it.amountCents
+                    )
+                }
+                "${entry.key} - ${formatSignedMoney(impact)}"
             }
             ?: "No merchant yet"
     }
@@ -623,7 +809,6 @@ fun LedgerLensSourceSetupApp(
         matchPhrase: String,
         merchantName: String? = null,
         categoryName: String? = null,
-        subcategoryName: String? = null,
         transactionType: String? = null,
         reviewStatus: String? = null,
         excludedFromSpending: Boolean? = null,
@@ -649,7 +834,6 @@ fun LedgerLensSourceSetupApp(
                 normalizedMatchPhrase = normalized,
                 merchantName = merchantName,
                 categoryName = categoryName,
-                subcategoryName = subcategoryName,
                 transactionType = transactionType,
                 reviewStatus = reviewStatus,
                 excludedFromSpending = excludedFromSpending,
@@ -665,7 +849,6 @@ fun LedgerLensSourceSetupApp(
                 matchPhrase = cleanedPhrase,
                 merchantName = merchantName ?: existing.merchantName,
                 categoryName = categoryName ?: existing.categoryName,
-                subcategoryName = subcategoryName ?: existing.subcategoryName,
                 transactionType = transactionType ?: existing.transactionType,
                 reviewStatus = reviewStatus ?: existing.reviewStatus,
                 excludedFromSpending = excludedFromSpending ?: existing.excludedFromSpending,
@@ -678,6 +861,188 @@ fun LedgerLensSourceSetupApp(
         }
 
         database.transactionRuleDao().upsert(merged)
+    }
+
+    suspend fun applyParserAliasRuleDraft(
+        draft: MerchantAliasRuleDraft,
+        replaceRuleId: Long?
+    ): MerchantAliasApplyResult {
+        val now = System.currentTimeMillis()
+        val currentTransactions = database.transactionDao().getAllOnce()
+        val rawAlertsById = database.rawAlertDao().getAllOnce().associateBy { it.id }
+        val previewItems = previewMerchantAliasRule(
+            draft = draft,
+            transactions = currentTransactions,
+            rawAlertsById = rawAlertsById
+        )
+        val rules = buildMerchantAliasRules(draft, now)
+
+        if (replaceRuleId != null) {
+            database.transactionRuleDao().deleteById(replaceRuleId)
+        }
+
+        rules.forEach { rule ->
+            database.transactionRuleDao().upsert(rule)
+        }
+
+        var merchantUpdated = 0
+        var categoryUpdated = 0
+        var treatmentUpdated = 0
+
+        previewItems.forEach { preview ->
+            val transaction = preview.transaction
+            val updated = applyMerchantAliasRuleToTransaction(
+                transaction = transaction,
+                draft = draft,
+                now = now
+            )
+
+            if (updated != transaction) {
+                if (updated.displayMerchantName != transaction.displayMerchantName ||
+                    updated.merchantRaw != transaction.merchantRaw
+                ) {
+                    merchantUpdated++
+                }
+                if (updated.categoryName != transaction.categoryName) {
+                    categoryUpdated++
+                }
+                if (updated.accountingTreatment != transaction.accountingTreatment) {
+                    treatmentUpdated++
+                }
+                database.transactionDao().update(updated)
+            }
+        }
+
+        return MerchantAliasApplyResult(
+            rulesSaved = rules.size,
+            matchedTransactions = previewItems.size,
+            merchantUpdated = merchantUpdated,
+            categoryUpdated = categoryUpdated,
+            treatmentUpdated = treatmentUpdated,
+            skippedMerchantUserEdited = previewItems.count { it.skippedMerchantUserEdited }
+        )
+    }
+
+    if (showQuickActions) {
+        QuickActionSheet(
+            actions = listOf(
+                QuickActionItem(
+                    title = "Refresh latest SMS",
+                    supportingText = "Import new SMS alerts without duplicating existing ones.",
+                    onClick = {
+                        statusText = "Refreshing latest SMS..."
+                        onRefreshLatestSms()
+                    }
+                ),
+                QuickActionItem(
+                    title = "Backfill SMS history",
+                    supportingText = "Import older financial-looking SMS alerts.",
+                    onClick = {
+                        statusText = "Running SMS backfill..."
+                        onBackfillSmsHistory()
+                    }
+                ),
+                QuickActionItem(
+                    title = "Detect sources",
+                    supportingText = "Find sender-level financial sources from imported SMS.",
+                    onClick = {
+                        statusText = "Detecting SMS sources..."
+                        scope.launch(Dispatchers.IO) {
+                            val detectedCount = detectAndSaveSources()
+                            withContext(Dispatchers.Main) {
+                                statusText = "Detected $detectedCount possible SMS sources."
+                            }
+                        }
+                    }
+                ),
+                QuickActionItem(
+                    title = "Parse identified sources",
+                    supportingText = "Build transactions from sources you already approved.",
+                    onClick = {
+                        statusText = "Parsing transactions from identified sources..."
+                        scope.launch(Dispatchers.IO) {
+                            val result = parseIdentifiedSourceTransactions(database)
+                            withContext(Dispatchers.Main) {
+                                statusText =
+                                    "Matched ${result.matchedAlertCount} SMS from identified sources. Parsed ${result.parsedCount}, skipped existing ${result.skippedCount}, ignored ${result.ignoredNonTransactionCount}, failed ${result.failedCount}."
+                            }
+                        }
+                    }
+                ),
+                QuickActionItem(
+                    title = "Reapply saved rules",
+                    supportingText = "Apply merchant defaults and phrase rules to existing transactions.",
+                    onClick = {
+                        statusText = "Reapplying saved rules to existing transactions..."
+                        scope.launch(Dispatchers.IO) {
+                            val updatedCount = reapplySavedRulesToExistingTransactions(database)
+                            withContext(Dispatchers.Main) {
+                                statusText = "Reapplied saved rules to $updatedCount existing transactions."
+                            }
+                        }
+                    }
+                ),
+                QuickActionItem(
+                    title = "Export transactions",
+                    supportingText = "Share a CSV of parsed transaction data.",
+                    onClick = {
+                        statusText = "Opening transaction export..."
+                        onExportTransactions()
+                    }
+                ),
+                QuickActionItem(
+                    title = "Export parser corpus",
+                    supportingText = "Share local JSONL examples for parser tuning.",
+                    onClick = {
+                        statusText = "Opening parser corpus export..."
+                        onExportParserCorpus()
+                    }
+                ),
+                QuickActionItem(
+                    title = "Tools and settings",
+                    supportingText = "Open maintenance actions, sources, and rules.",
+                    onClick = {
+                        activeScreen = AppScreen.TOOLS
+                    }
+                )
+            ),
+            onDismiss = {
+                showQuickActions = false
+            }
+        )
+    }
+
+    parserRuleEditorRequest?.let { request ->
+        ParserRuleEditorSheet(
+            title = request.title,
+            initialDraft = request.draft,
+            transactions = transactions,
+            rawAlerts = rawAlerts,
+            onDismiss = {
+                parserRuleEditorRequest = null
+            },
+            onApply = { draft ->
+                val selectedTransactionId = selectedTransaction?.id
+                scope.launch(Dispatchers.IO) {
+                    val result = applyParserAliasRuleDraft(
+                        draft = draft,
+                        replaceRuleId = request.replaceRuleId
+                    )
+                    val refreshedSelectedTransaction = selectedTransactionId?.let { selectedId ->
+                        database.transactionDao()
+                            .getAllOnce()
+                            .firstOrNull { it.id == selectedId }
+                    }
+                    withContext(Dispatchers.Main) {
+                        if (refreshedSelectedTransaction != null) {
+                            selectedTransaction = refreshedSelectedTransaction
+                        }
+                        statusText = "Saved ${result.rulesSaved} parser aliases. Matched ${result.matchedTransactions}; renamed ${result.merchantUpdated}; category ${result.categoryUpdated}; treatment ${result.treatmentUpdated}; skipped ${result.skippedMerchantUserEdited} manual merchant edits."
+                        parserRuleEditorRequest = null
+                    }
+                }
+            }
+        )
     }
 
     if (selectedSource != null) {
@@ -752,6 +1117,7 @@ fun LedgerLensSourceSetupApp(
         TransactionDetailScreen(
             transaction = selectedTransaction!!,
             rawAlert = matchingRawAlert,
+            allTransactions = transactions,
             onBack = {
                 selectedTransaction = null
             },
@@ -829,24 +1195,25 @@ fun LedgerLensSourceSetupApp(
                     }
                 }
             },
-            onUpdateCategory = { category, subcategory ->
+            onUpdateSpendingAttribution = { category, spendingMerchant ->
                 scope.launch(Dispatchers.IO) {
                     val cleanedCategory = category.trim().ifBlank { null }
-                    val cleanedSubcategory = subcategory.trim().ifBlank { null }
+                    val cleanedSpendingMerchant = spendingMerchant.trim().ifBlank { null }
+                    val updatedAt = System.currentTimeMillis()
 
-                    database.transactionDao().updateCategory(
+                    database.transactionDao().updateSpendingAttribution(
                         transactionId = selectedTransaction!!.id,
                         categoryName = cleanedCategory,
-                        subcategoryName = cleanedSubcategory,
-                        updatedAtEpochMs = System.currentTimeMillis()
+                        spendingMerchantName = cleanedSpendingMerchant,
+                        updatedAtEpochMs = updatedAt
                     )
 
                     withContext(Dispatchers.Main) {
                         selectedTransaction = selectedTransaction!!.copy(
                             categoryName = cleanedCategory,
-                            subcategoryName = cleanedSubcategory,
+                            spendingMerchantName = cleanedSpendingMerchant,
                             categoryUserEdited = true,
-                            updatedAtEpochMs = System.currentTimeMillis()
+                            updatedAtEpochMs = updatedAt
                         )
                     }
                 }
@@ -921,11 +1288,10 @@ fun LedgerLensSourceSetupApp(
                     }
                 }
             },
-            onApplyCategoryToSimilar = { matchPhrase, category, subcategory, onComplete ->
+            onApplyCategoryToSimilar = { matchPhrase, category, onComplete ->
                 scope.launch(Dispatchers.IO) {
                     val cleanedPhrase = matchPhrase.trim()
                     val cleanedCategory = category.trim().ifBlank { null }
-                    val cleanedSubcategory = subcategory.trim().ifBlank { null }
 
                     if (cleanedPhrase.isBlank()) {
                         withContext(Dispatchers.Main) {
@@ -937,22 +1303,19 @@ fun LedgerLensSourceSetupApp(
                     saveMergedRule(
                         sourceKey = selectedTransaction!!.sourceKey,
                         matchPhrase = cleanedPhrase,
-                        categoryName = cleanedCategory,
-                        subcategoryName = cleanedSubcategory
+                        categoryName = cleanedCategory
                     )
 
                     val updatedCount = database.transactionDao().updateCategoryForSimilarRawText(
                         sourceKey = selectedTransaction!!.sourceKey,
                         likePattern = "%$cleanedPhrase%",
                         categoryName = cleanedCategory,
-                        subcategoryName = cleanedSubcategory,
                         updatedAtEpochMs = System.currentTimeMillis()
                     )
 
                     withContext(Dispatchers.Main) {
                         selectedTransaction = selectedTransaction!!.copy(
                             categoryName = cleanedCategory,
-                            subcategoryName = cleanedSubcategory,
                             categoryUserEdited = true,
                             updatedAtEpochMs = System.currentTimeMillis()
                         )
@@ -960,6 +1323,12 @@ fun LedgerLensSourceSetupApp(
                         onComplete(updatedCount)
                     }
                 }
+            },
+            onOpenParserRuleEditor = { draft ->
+                parserRuleEditorRequest = ParserRuleEditorRequest(
+                    title = "Fix parser rule",
+                    draft = draft
+                )
             }
         )
     } else if (activeScreen == AppScreen.SETUP) {
@@ -968,7 +1337,7 @@ fun LedgerLensSourceSetupApp(
             sources = sources,
             statusText = statusText,
             onBack = {
-                activeScreen = AppScreen.HOME
+                activeScreen = AppScreen.TOOLS
             },
             onBackfillSmsHistory = {
                 statusText = "Importing SMS history..."
@@ -1035,8 +1404,14 @@ fun LedgerLensSourceSetupApp(
     } else if (activeScreen == AppScreen.SUMMARY) {
         SpendingSummaryScreen(
             transactions = transactions,
+            onNavigate = { screen ->
+                activeScreen = screen
+            },
+            onQuickActions = {
+                showQuickActions = true
+            },
             onBack = {
-                activeScreen = AppScreen.HOME
+                activeScreen = AppScreen.SUMMARY
             },
             onTransactionSelected = { transaction ->
                 selectedTransaction = transaction
@@ -1047,8 +1422,14 @@ fun LedgerLensSourceSetupApp(
     else if (activeScreen == AppScreen.REVIEW_QUEUE) {
         ReviewQueueScreen(
             transactions = transactions,
+            onNavigate = { screen ->
+                activeScreen = screen
+            },
+            onQuickActions = {
+                showQuickActions = true
+            },
             onBack = {
-                activeScreen = AppScreen.HOME
+                activeScreen = AppScreen.SUMMARY
             },
             onTransactionSelected = { transaction ->
                 selectedTransaction = transaction
@@ -1060,8 +1441,14 @@ fun LedgerLensSourceSetupApp(
     else if (activeScreen == AppScreen.TRANSACTIONS) {
         TransactionReviewScreen(
             transactions = transactions,
+            onNavigate = { screen ->
+                activeScreen = screen
+            },
+            onQuickActions = {
+                showQuickActions = true
+            },
             onBack = {
-                activeScreen = AppScreen.HOME
+                activeScreen = AppScreen.SUMMARY
             },
             onTransactionSelected = { transaction ->
                 selectedTransaction = transaction
@@ -1070,8 +1457,17 @@ fun LedgerLensSourceSetupApp(
     } else if (activeScreen == AppScreen.RULES) {
         RulesScreen(
             rules = activeRules,
+            transactions = transactions,
+            rawAlerts = rawAlerts,
             onBack = {
-                activeScreen = AppScreen.HOME
+                activeScreen = AppScreen.TOOLS
+            },
+            onOpenParserRuleEditor = { rule ->
+                parserRuleEditorRequest = ParserRuleEditorRequest(
+                    title = "Edit parser rule",
+                    draft = buildMerchantAliasDraftForRule(rule),
+                    replaceRuleId = rule.id
+                )
             },
             onDisableRule = { rule ->
                 scope.launch(Dispatchers.IO) {
@@ -1097,23 +1493,21 @@ fun LedgerLensSourceSetupApp(
     } else if (selectedMerchant != null) {
         val merchantTransactions = transactions
             .filter {
-                val merchant = it.displayMerchantName
-                    ?: it.merchantRaw
-                    ?: ""
-                merchant.equals(selectedMerchant!!.merchantName, ignoreCase = true)
+                merchantSummaryName(it).equals(selectedMerchant!!.merchantName, ignoreCase = true)
             }
             .sortedByDescending { it.occurredAtEpochMs }
 
         MerchantDetailScreen(
             merchant = selectedMerchant!!,
             transactions = merchantTransactions,
+            allTransactions = transactions,
+            rawAlerts = rawAlerts,
             onBack = {
                 selectedMerchant = null
             },
-            onUpdateMerchantCategory = { category, subcategory, treatment, applyCategoryAutomatically, requiresReview ->
+            onUpdateMerchantCategory = { category, treatment, applyCategoryAutomatically, requiresReview ->
                 scope.launch(Dispatchers.IO) {
                     val cleanedCategory = category.trim().ifBlank { null }
-                    val cleanedSubcategory = subcategory.trim().ifBlank { null }
                     val cleanedTreatment = treatment.trim().ifBlank {
                         selectedMerchant!!.primaryTreatment
                     }
@@ -1123,7 +1517,6 @@ fun LedgerLensSourceSetupApp(
                         database.transactionDao().updateCategoryForMerchantName(
                             merchantName = selectedMerchant!!.merchantName,
                             categoryName = cleanedCategory,
-                            subcategoryName = cleanedSubcategory,
                             updatedAtEpochMs = now
                         )
                     }
@@ -1140,7 +1533,6 @@ fun LedgerLensSourceSetupApp(
                         matchPhrase = selectedMerchant!!.merchantName,
                         merchantName = selectedMerchant!!.merchantName,
                         categoryName = cleanedCategory,
-                        subcategoryName = cleanedSubcategory,
                         transactionType = cleanedTreatment,
                         excludedFromSpending = TransactionTreatments.defaultExcludedFromSpending(cleanedTreatment),
                         appliesToTreatment = cleanedTreatment,
@@ -1152,24 +1544,82 @@ fun LedgerLensSourceSetupApp(
                         selectedMerchant = selectedMerchant!!.copy(
                             primaryTreatment = cleanedTreatment,
                             categoryName = cleanedCategory,
-                            subcategoryName = cleanedSubcategory,
                             uncategorizedCount = if (applyCategoryAutomatically) 0 else selectedMerchant!!.uncategorizedCount
                         )
                     }
                 }
+            },
+            onRenameMerchantGroup = { newName ->
+                scope.launch(Dispatchers.IO) {
+                    val oldName = selectedMerchant!!.merchantName
+                    val cleanedName = newName.trim().ifBlank { oldName }
+                    var updatedCount = 0
+                    database.transactionDao()
+                        .getAllOnce()
+                        .filter { transaction ->
+                            merchantSummaryName(transaction).equals(oldName, ignoreCase = true)
+                        }
+                        .forEach { transaction ->
+                            val isSpendingAttribution = transaction.spendingMerchantName
+                                ?.equals(oldName, ignoreCase = true)
+                                ?: false
+                            database.transactionDao().update(
+                                if (isSpendingAttribution) {
+                                    transaction.copy(
+                                        spendingMerchantName = cleanedName,
+                                        categoryUserEdited = true,
+                                        updatedAtEpochMs = System.currentTimeMillis()
+                                    )
+                                } else {
+                                    transaction.copy(
+                                        merchantRaw = cleanedName,
+                                        displayMerchantName = cleanedName,
+                                        merchantUserEdited = true,
+                                        updatedAtEpochMs = System.currentTimeMillis()
+                                    )
+                                }
+                            )
+                            updatedCount++
+                        }
+
+                    withContext(Dispatchers.Main) {
+                        selectedMerchant = selectedMerchant!!.copy(merchantName = cleanedName)
+                        statusText = "Renamed $updatedCount existing transactions to $cleanedName without creating a parser rule."
+                    }
+                }
+            },
+            onOpenParserRuleEditor = { draft ->
+                parserRuleEditorRequest = ParserRuleEditorRequest(
+                    title = "Fix merchant parser rule",
+                    draft = draft
+                )
             },
             onTransactionSelected = { transaction ->
                 selectedTransaction = transaction
             }
         )
     } else if (activeScreen == AppScreen.MERCHANTS) {
-        MerchantReviewScreen(
+        MerchantReviewInboxScreen(
             transactions = transactions,
+            rules = activeRules,
             onBack = {
-                activeScreen = AppScreen.HOME
+                activeScreen = AppScreen.REVIEW_QUEUE
             },
             onMerchantSelected = { merchant ->
                 selectedMerchant = merchant
+            },
+            onApplyCategoryToMerchants = { merchantNames, option ->
+                scope.launch(Dispatchers.IO) {
+                    val result = applyMerchantCategoryBulk(
+                        database = database,
+                        merchantNames = merchantNames,
+                        option = option
+                    )
+
+                    withContext(Dispatchers.Main) {
+                        statusText = "Applied ${option.label} to ${result.merchantCount} merchants and ${result.transactionCount} transactions."
+                    }
+                }
             }
         )
     } else if (activeScreen == AppScreen.HOME) {
@@ -1184,9 +1634,12 @@ fun LedgerLensSourceSetupApp(
             currentMonthSpendingCents = currentMonthSpendingCents,
             currentMonthIncomeCents = currentMonthIncomeCents,
             currentMonthRefundCents = currentMonthRefundCents,
+            currentMonthReimbursementCents = currentMonthReimbursementCents,
             currentMonthMovementCents = currentMonthMovementCents,
             previousMonthSpendingCents = previousMonthSpendingCents,
+            currentMonthGrossExpenseCents = currentMonthGrossExpenseCents,
             currentMonthExpenseCount = currentMonthExpenses.size,
+            currentMonthCategorySummaries = currentMonthCategorySummaries,
             topCategoryLabel = topCategoryLabel,
             topMerchantLabel = topMerchantLabel,
             onOpenSetup = {
@@ -1212,6 +1665,9 @@ fun LedgerLensSourceSetupApp(
             },
             onOpenRules = {
                 activeScreen = AppScreen.RULES
+            },
+            onOpenQuickActions = {
+                showQuickActions = true
             }
         )
     } else if (activeScreen == AppScreen.TOOLS) {
@@ -1220,15 +1676,28 @@ fun LedgerLensSourceSetupApp(
             sourceCount = sourceCount,
             transactionCount = transactionCount,
             activeRuleCount = activeRuleCount,
+            transactions = transactions,
             statusText = statusText,
+            onNavigate = { screen ->
+                activeScreen = screen
+            },
+            onQuickActions = {
+                showQuickActions = true
+            },
             onBack = {
-                activeScreen = AppScreen.HOME
+                activeScreen = AppScreen.SUMMARY
+            },
+            onOpenSetup = {
+                activeScreen = AppScreen.SETUP
             },
             onOpenSources = {
                 activeScreen = AppScreen.SOURCES
             },
             onOpenRules = {
                 activeScreen = AppScreen.RULES
+            },
+            onMerchantSelected = { merchant ->
+                selectedMerchant = merchant
             },
             onBackfillSmsHistory = {
                 statusText = "Running SMS backfill..."
@@ -1310,7 +1779,7 @@ fun LedgerLensSourceSetupApp(
         SourceListScreen(
             sources = sources,
             onBack = {
-                activeScreen = AppScreen.HOME
+                activeScreen = AppScreen.TOOLS
             },
             onSourceSelected = { source ->
                 selectedSource = source
@@ -1365,8 +1834,11 @@ fun SetupScreen(
             item {
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Card(
-                    modifier = Modifier.fillMaxWidth()
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                    tonalElevation = 0.dp
                 ) {
                     Column(
                         modifier = Modifier.padding(12.dp)
@@ -1401,8 +1873,11 @@ fun SetupScreen(
             }
 
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth()
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                    tonalElevation = 0.dp
                 ) {
                     Column(
                         modifier = Modifier.padding(12.dp)
@@ -1495,8 +1970,11 @@ fun SetupSourceCard(
     onConfirmSource: (FinancialSourceEntity, String) -> Unit,
     onDismissSource: (FinancialSourceEntity) -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
     ) {
         Column(
             modifier = Modifier.padding(12.dp)
@@ -1753,6 +2231,19 @@ fun SourceCompactCard(
     val effectiveType = source.confirmedAccountType
         ?: source.suggestedAccountType
 
+    LedgerListRow(
+        title = source.displayName
+            ?: source.institutionName
+            ?: "Unknown financial source",
+        supportingText = "$categoryLabel - Type: $effectiveType - Messages: ${source.messageCount}",
+        metadataText = "Sender ${source.sourceAddress} - ${"%.0f".format(source.detectionConfidence * 100)}% confidence",
+        pillText = categoryLabel,
+        leadingText = source.sourceAddress.take(2),
+        trailingText = "Review",
+        onClick = onClick
+    )
+    return
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -1892,8 +2383,11 @@ fun SourceDetailSummaryCard(
         SimpleDateFormat("MMM dd, yyyy h:mm a", Locale.getDefault())
     }
 
-    Card(
-        modifier = Modifier.fillMaxWidth()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
     ) {
         Column(
             modifier = Modifier.padding(12.dp)
@@ -1938,8 +2432,11 @@ fun SourceActionCard(
     onDismissAsNonSource: () -> Unit,
     onMoveToUncategorized: () -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
     ) {
         Column(
             modifier = Modifier.padding(12.dp)
@@ -2026,8 +2523,11 @@ fun SmsMessageCard(
     alert: RawAlertEntity,
     formatter: SimpleDateFormat
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
     ) {
         Column(
             modifier = Modifier.padding(12.dp)
@@ -2056,6 +2556,8 @@ fun SmsMessageCard(
 @Composable
 fun TransactionReviewScreen(
     transactions: List<TransactionEntity>,
+    onNavigate: (AppScreen) -> Unit,
+    onQuickActions: () -> Unit,
     onBack: () -> Unit,
     onTransactionSelected: (TransactionEntity) -> Unit
 ) {
@@ -2067,11 +2569,30 @@ fun TransactionReviewScreen(
         mutableStateOf("")
     }
 
+    var selectedMonthStart by remember {
+        mutableLongStateOf(getCurrentMonthStartEpochMs())
+    }
+
+    var monthFilterEnabled by remember {
+        mutableStateOf(true)
+    }
+
     val sortedTransactions = remember(transactions) {
         transactions.sortedByDescending { it.occurredAtEpochMs }
     }
 
-    val filteredTransactions = remember(sortedTransactions, selectedFilter, searchText) {
+    val selectedMonthEnd = remember(selectedMonthStart) {
+        getNextMonthStartEpochMs(selectedMonthStart)
+    }
+
+    val filteredTransactions = remember(
+        sortedTransactions,
+        selectedFilter,
+        searchText,
+        selectedMonthStart,
+        selectedMonthEnd,
+        monthFilterEnabled
+    ) {
         val base = when (selectedFilter) {
             TransactionFilter.ALL -> sortedTransactions
 
@@ -2095,21 +2616,32 @@ fun TransactionReviewScreen(
             }
 
             TransactionFilter.EXCLUDED_FROM_SPENDING -> sortedTransactions.filter {
-                it.accountingTreatment != TransactionTreatments.EXPENSE ||
-                        it.excludedFromSpending
+                !TransactionTreatments.isInSpendingView(
+                    treatment = it.accountingTreatment,
+                    excludedFromSpending = it.excludedFromSpending
+                )
             }
+        }
+
+        val dateFiltered = if (monthFilterEnabled) {
+            base.filter {
+                it.occurredAtEpochMs >= selectedMonthStart &&
+                    it.occurredAtEpochMs < selectedMonthEnd
+            }
+        } else {
+            base
         }
 
         val query = searchText.trim().lowercase(Locale.US)
         if (query.isBlank()) {
-            base
+            dateFiltered
         } else {
-            base.filter { transaction ->
+            dateFiltered.filter { transaction ->
                 listOfNotNull(
                     transaction.displayMerchantName,
+                    transaction.spendingMerchantName,
                     transaction.merchantRaw,
                     transaction.categoryName,
-                    transaction.subcategoryName,
                     transaction.sourceInstitution,
                     transaction.accountingTreatment,
                     transaction.transactionType,
@@ -2119,33 +2651,55 @@ fun TransactionReviewScreen(
         }
     }
 
-    val totalCount = sortedTransactions.size
-    val needsReviewCount = sortedTransactions.count { it.reviewStatus == "NEEDS_REVIEW" }
-    val excludedCount = sortedTransactions.count {
-        it.accountingTreatment != TransactionTreatments.EXPENSE || it.excludedFromSpending
+    val totalCount = remember(sortedTransactions, monthFilterEnabled, selectedMonthStart, selectedMonthEnd) {
+        sortedTransactions.count {
+            !monthFilterEnabled ||
+                (it.occurredAtEpochMs >= selectedMonthStart && it.occurredAtEpochMs < selectedMonthEnd)
+        }
     }
-    val expenseCount = sortedTransactions.count { it.accountingTreatment == TransactionTreatments.EXPENSE }
-    val transferCount = sortedTransactions.count {
+    val visibleTransactionsForCounts = remember(sortedTransactions, monthFilterEnabled, selectedMonthStart, selectedMonthEnd) {
+        if (monthFilterEnabled) {
+            sortedTransactions.filter {
+                it.occurredAtEpochMs >= selectedMonthStart && it.occurredAtEpochMs < selectedMonthEnd
+            }
+        } else {
+            sortedTransactions
+        }
+    }
+    val needsReviewCount = visibleTransactionsForCounts.count { it.reviewStatus == "NEEDS_REVIEW" }
+    val excludedCount = visibleTransactionsForCounts.count {
+        !TransactionTreatments.isInSpendingView(
+            treatment = it.accountingTreatment,
+            excludedFromSpending = it.excludedFromSpending
+        )
+    }
+    val expenseCount = visibleTransactionsForCounts.count { it.accountingTreatment == TransactionTreatments.EXPENSE }
+    val transferCount = visibleTransactionsForCounts.count {
         it.accountingTreatment in setOf(
             TransactionTreatments.TRANSFER,
             TransactionTreatments.PERSON_TO_PERSON
         )
     }
-    val creditCardPaymentCount = sortedTransactions.count {
+    val creditCardPaymentCount = visibleTransactionsForCounts.count {
         it.accountingTreatment == TransactionTreatments.CREDIT_CARD_PAYMENT
     }
+    val filteredImpactCents = filteredTransactions.sumOf {
+        TransactionTreatments.spendingImpactCents(
+            treatment = it.accountingTreatment,
+            excludedFromSpending = it.excludedFromSpending,
+            amountCents = it.amountCents
+        )
+    }
+    val groupedTransactions = remember(filteredTransactions) {
+        filteredTransactions.groupBy { activityDateHeaderLabel(it.occurredAtEpochMs) }
+    }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Transactions") },
-                navigationIcon = {
-                    TextButton(onClick = onBack) {
-                        Text("Back")
-                    }
-                }
-            )
-        }
+    LedgerAppScaffold(
+        title = "Activity",
+        activeScreen = AppScreen.TRANSACTIONS,
+        onNavigate = onNavigate,
+        onQuickActions = onQuickActions,
+        onBack = onBack
     ) { padding ->
         LazyColumn(
             modifier = Modifier
@@ -2153,40 +2707,44 @@ fun TransactionReviewScreen(
                 .padding(padding)
                 .padding(horizontal = 16.dp),
             contentPadding = PaddingValues(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(0.dp)
         ) {
             item {
                 Spacer(modifier = Modifier.height(8.dp))
 
-                TransactionSummaryCard(
-                    totalCount = totalCount,
-                    expenseCount = expenseCount,
-                    needsReviewCount = needsReviewCount,
-                    excludedCount = excludedCount
-                )
-            }
-
-            item {
-                TransactionFilterCard(
+                ActivitySearchAndFilters(
+                    searchText = searchText,
+                    onSearchTextChange = { searchText = it },
                     selectedFilter = selectedFilter,
+                    onFilterSelected = { selectedFilter = it },
+                    monthLabel = if (monthFilterEnabled) formatMonthYear(selectedMonthStart) else "All months",
+                    monthFilterEnabled = monthFilterEnabled,
+                    onPreviousMonth = {
+                        monthFilterEnabled = true
+                        selectedMonthStart = getPreviousMonthStartEpochMs(selectedMonthStart)
+                    },
+                    onNextMonth = {
+                        monthFilterEnabled = true
+                        selectedMonthStart = getNextMonthStartEpochMs(selectedMonthStart)
+                    },
+                    onToggleAllMonths = {
+                        monthFilterEnabled = !monthFilterEnabled
+                    },
                     totalCount = totalCount,
                     needsReviewCount = needsReviewCount,
                     expenseCount = expenseCount,
                     transferCount = transferCount,
                     creditCardPaymentCount = creditCardPaymentCount,
-                    excludedCount = excludedCount,
-                    filteredCount = filteredTransactions.size,
-                    onFilterSelected = { selectedFilter = it }
+                    excludedCount = excludedCount
                 )
+
+                Spacer(modifier = Modifier.height(8.dp))
             }
 
             item {
-                OutlinedTextField(
-                    value = searchText,
-                    onValueChange = { searchText = it },
-                    label = { Text("Search transactions") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
+                ActivityListSummary(
+                    filteredCount = filteredTransactions.size,
+                    filteredImpactCents = filteredImpactCents
                 )
             }
 
@@ -2195,17 +2753,325 @@ fun TransactionReviewScreen(
                     EmptySectionText("No transactions found for this filter.")
                 }
             } else {
-                items(
-                    items = filteredTransactions,
-                    key = { it.id }
-                ) { transaction ->
-                    TransactionCard(
-                        transaction = transaction,
-                        onClick = { onTransactionSelected(transaction) }
-                    )
+                groupedTransactions.forEach { (dateLabel, dateTransactions) ->
+                    item(key = "header-$dateLabel") {
+                        ActivityDateHeader(dateLabel)
+                    }
+
+                    items(
+                        items = dateTransactions,
+                        key = { it.id }
+                    ) { transaction ->
+                        ActivityTransactionRow(
+                            transaction = transaction,
+                            onClick = { onTransactionSelected(transaction) }
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+fun ActivitySearchAndFilters(
+    searchText: String,
+    onSearchTextChange: (String) -> Unit,
+    selectedFilter: TransactionFilter,
+    onFilterSelected: (TransactionFilter) -> Unit,
+    monthLabel: String,
+    monthFilterEnabled: Boolean,
+    onPreviousMonth: () -> Unit,
+    onNextMonth: () -> Unit,
+    onToggleAllMonths: () -> Unit,
+    totalCount: Int,
+    needsReviewCount: Int,
+    expenseCount: Int,
+    transferCount: Int,
+    creditCardPaymentCount: Int,
+    excludedCount: Int
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        OutlinedTextField(
+            value = searchText,
+            onValueChange = onSearchTextChange,
+            label = { Text("Search transactions") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+        ) {
+            OutlinedButton(
+                onClick = onPreviousMonth,
+                modifier = Modifier.weight(0.7f)
+            ) {
+                Text("<")
+            }
+            OutlinedButton(
+                onClick = onToggleAllMonths,
+                modifier = Modifier.weight(1.8f)
+            ) {
+                Text(monthLabel)
+            }
+            OutlinedButton(
+                onClick = onNextMonth,
+                modifier = Modifier.weight(0.7f)
+            ) {
+                Text(">")
+            }
+        }
+
+        if (!monthFilterEnabled) {
+            Text(
+                text = "Showing every imported transaction",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        val filterItems = listOf(
+            TransactionFilter.ALL to "All $totalCount",
+            TransactionFilter.NEEDS_REVIEW to "Needs review $needsReviewCount",
+            TransactionFilter.EXPENSES to "Expenses $expenseCount",
+            TransactionFilter.TRANSFERS to "Transfers $transferCount",
+            TransactionFilter.CREDIT_CARD_PAYMENTS to "Card payments $creditCardPaymentCount",
+            TransactionFilter.EXCLUDED_FROM_SPENDING to "Outside spending $excludedCount"
+        )
+
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(vertical = 2.dp)
+        ) {
+            items(
+                items = filterItems,
+                key = { it.first.name }
+            ) { (filter, label) ->
+                ActivityFilterChip(
+                    label = label,
+                    selected = selectedFilter == filter,
+                    onClick = { onFilterSelected(filter) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ActivityFilterChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier.clickable { onClick() },
+        color = if (selected) colors.primary.copy(alpha = 0.12f) else colors.surface,
+        contentColor = if (selected) colors.primary else colors.onSurfaceVariant,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            width = 1.dp,
+            color = if (selected) colors.primary.copy(alpha = 0.35f) else colors.outlineVariant
+        )
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+        )
+    }
+}
+
+@Composable
+fun ActivityListSummary(
+    filteredCount: Int,
+    filteredImpactCents: Long
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+    ) {
+        Text(
+            text = "$filteredCount transactions",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = "Net impact ${formatSignedMoney(filteredImpactCents)}",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+fun ActivityDateHeader(dateLabel: String) {
+    Text(
+        text = dateLabel,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 12.dp, bottom = 6.dp)
+    )
+}
+
+@Composable
+fun ActivityTransactionRow(
+    transaction: TransactionEntity,
+    onClick: () -> Unit
+) {
+    val timeFormatter = remember {
+        SimpleDateFormat("h:mm a", Locale.getDefault())
+    }
+    val merchantName = transaction.displayMerchantName
+        ?: transaction.merchantRaw
+        ?: transaction.sourceInstitution
+        ?: treatmentLabel(transaction.accountingTreatment)
+    val categoryLabel = activityCategoryLabel(transaction)
+    val categoryColor = spendingCategoryColor(categoryLabel, 0)
+    val merchantColor = merchantAccentColor(merchantName, transaction.id.toInt())
+    val sourceLabel = activitySourceLabel(transaction)
+    val needsReview = transaction.reviewStatus == "NEEDS_REVIEW"
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+        ) {
+            Surface(
+                color = merchantColor.copy(alpha = 0.14f),
+                contentColor = merchantColor,
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+            ) {
+                Text(
+                    text = categoryGlyph(categoryLabel),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                )
+            }
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                Text(
+                    text = merchantName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                ) {
+                    ActivitySmallBadge(
+                        text = categoryLabel,
+                        color = categoryColor
+                    )
+                    if (needsReview) {
+                        ActivitySmallBadge(
+                            text = "Needs review",
+                            color = Color(0xFFFFA044)
+                        )
+                    }
+                }
+
+                Text(
+                    text = listOf(
+                        timeFormatter.format(Date(transaction.occurredAtEpochMs)),
+                        sourceLabel
+                    ).filter { it.isNotBlank() }.joinToString(" - "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+            }
+
+            Column(
+                horizontalAlignment = androidx.compose.ui.Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = activityAmountLabel(transaction),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                )
+                Text(
+                    text = ">",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ActivitySmallBadge(
+    text: String,
+    color: Color
+) {
+    Surface(
+        color = color.copy(alpha = 0.12f),
+        contentColor = color,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+        )
+    }
+}
+
+fun activityDateHeaderLabel(epochMs: Long): String {
+    return SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()).format(Date(epochMs))
+}
+
+fun activityCategoryLabel(transaction: TransactionEntity): String {
+    val category = transaction.categoryName
+        ?.trim()
+        ?.takeIf { !isVirtualUncategorizedCategory(it) && !it.equals("General", ignoreCase = true) }
+    return category ?: treatmentLabel(transaction.accountingTreatment)
+}
+
+fun activitySourceLabel(transaction: TransactionEntity): String {
+    return listOfNotNull(
+        transaction.sourceInstitution?.takeIf { it.isNotBlank() },
+        transaction.accountHint?.takeIf { it.isNotBlank() }
+    ).joinToString(" - ").ifBlank { "SMS" }
+}
+
+fun activityAmountLabel(transaction: TransactionEntity): String {
+    val amount = "${'$'}${"%.2f".format(Locale.US, transaction.amountCents / 100.0)}"
+    return when (transaction.accountingTreatment) {
+        TransactionTreatments.INCOME -> "+$amount"
+        TransactionTreatments.REFUND,
+        TransactionTreatments.REIMBURSEMENT -> "-$amount"
+        else -> amount
     }
 }
 
@@ -2216,25 +3082,14 @@ fun TransactionSummaryCard(
     needsReviewCount: Int,
     excludedCount: Int
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp)
-        ) {
-            Text(
-                text = "Parsed Transaction Summary",
-                style = MaterialTheme.typography.titleMedium
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Text("Total parsed: $totalCount")
-            Text("Expenses: $expenseCount")
-            Text("Needs review: $needsReviewCount")
-            Text("Tracked outside spending: $excludedCount")
-        }
-    }
+    StatStrip(
+        items = listOf(
+            StatStripItem("Total", totalCount.toString(), emphasized = true),
+            StatStripItem("Expenses", expenseCount.toString()),
+            StatStripItem("Review", needsReviewCount.toString()),
+            StatStripItem("Other", excludedCount.toString())
+        )
+    )
 }
 
 @Composable
@@ -2247,6 +3102,39 @@ fun TransactionCard(
     }
 
     val amount = transaction.amountCents / 100.0
+    val spendingImpact = TransactionTreatments.spendingImpactCents(
+        treatment = transaction.accountingTreatment,
+        excludedFromSpending = transaction.excludedFromSpending,
+        amountCents = transaction.amountCents
+    )
+
+    val sourceText = listOfNotNull(
+        transaction.sourceInstitution,
+        transaction.accountHint?.let { "Hint $it" },
+        "Review ${transaction.reviewStatus}",
+        "${"%.0f".format(transaction.parseConfidence * 100)}% confidence"
+    ).joinToString(" - ")
+
+    LedgerListRow(
+        title = transaction.displayMerchantName
+            ?: transaction.sourceInstitution
+            ?: treatmentLabel(transaction.accountingTreatment),
+        supportingText = formatter.format(Date(transaction.occurredAtEpochMs)),
+        metadataText = sourceText,
+        pillText = treatmentLabel(transaction.accountingTreatment),
+        trailingText = "$${"%.2f".format(amount)}",
+        trailingSupportingText = if (spendingImpact == 0L) {
+            "Outside spending"
+        } else {
+            "Impact ${formatSignedMoney(spendingImpact)}"
+        },
+        leadingText = transaction.displayMerchantName
+            ?.take(1)
+            ?: transaction.sourceInstitution?.take(1)
+            ?: "$",
+        onClick = onClick
+    )
+    return
 
     Card(
         modifier = Modifier
@@ -2334,8 +3222,13 @@ fun TransactionFilterCard(
     filteredCount: Int,
     onFilterSelected: (TransactionFilter) -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 10.dp),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
     ) {
         Column(
             modifier = Modifier.padding(12.dp)
@@ -2447,15 +3340,17 @@ fun TransactionFilterButton(
 fun TransactionDetailScreen(
     transaction: TransactionEntity,
     rawAlert: RawAlertEntity?,
+    allTransactions: List<TransactionEntity>,
     onBack: () -> Unit,
     onUpdateTransactionType: (String, Boolean) -> Unit,
     onUpdateReviewStatus: (String) -> Unit,
     onUpdateExcludedFromSpending: (Boolean) -> Unit,
     onUpdateMerchant: (String) -> Unit,
-    onUpdateCategory: (String, String) -> Unit,
+    onUpdateSpendingAttribution: (String, String) -> Unit,
     onApplyMerchantToSimilar: (String, String, (Int) -> Unit) -> Unit,
     onApplyCurrentClassificationToSimilar: (String, (Int) -> Unit) -> Unit,
-    onApplyCategoryToSimilar: (String, String, String, (Int) -> Unit) -> Unit
+    onApplyCategoryToSimilar: (String, String, (Int) -> Unit) -> Unit,
+    onOpenParserRuleEditor: (MerchantAliasRuleDraft) -> Unit
 ) {
     val formatter = remember {
         SimpleDateFormat("MMM dd, yyyy h:mm a", Locale.getDefault())
@@ -2465,17 +3360,91 @@ fun TransactionDetailScreen(
         mutableStateOf(false)
     }
 
+    var showOriginalSms by remember(transaction.id) {
+        mutableStateOf(false)
+    }
+
+    var showCategoryPicker by remember(transaction.id) {
+        mutableStateOf(false)
+    }
+
+    var saveMessage by remember(transaction.id) {
+        mutableStateOf<String?>(null)
+    }
+
+    var merchantDraft by remember(transaction.id, transaction.displayMerchantName, transaction.merchantRaw) {
+        mutableStateOf(transaction.displayMerchantName ?: transaction.merchantRaw ?: "")
+    }
+
+    var categoryDraft by remember(transaction.id, transaction.categoryName) {
+        mutableStateOf(transaction.categoryName.orEmpty())
+    }
+
+    var spendingMerchantDraft by remember(transaction.id, transaction.spendingMerchantName) {
+        mutableStateOf(transaction.spendingMerchantName.orEmpty())
+    }
+
+    var treatmentDraft by remember(transaction.id, transaction.accountingTreatment) {
+        mutableStateOf(transaction.accountingTreatment)
+    }
+
+    var excludedDraft by remember(transaction.id, transaction.excludedFromSpending) {
+        mutableStateOf(transaction.excludedFromSpending)
+    }
+
+    var reviewStatusDraft by remember(transaction.id, transaction.reviewStatus) {
+        mutableStateOf(transaction.reviewStatus)
+    }
+
+    val showSpendingAttributionByDefault = transaction.accountingTreatment in setOf(
+        TransactionTreatments.PERSON_TO_PERSON,
+        TransactionTreatments.TRANSFER,
+        TransactionTreatments.REIMBURSEMENT
+    ) || !transaction.spendingMerchantName.isNullOrBlank()
+
+    val categoryOptions = remember(allTransactions) {
+        transactionCategoryOptions(allTransactions)
+    }
+
+    if (showCategoryPicker) {
+        ModalBottomSheet(
+            onDismissRequest = { showCategoryPicker = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            TransactionCategoryPickerSheet(
+                options = categoryOptions,
+                selectedCategory = categoryDraft,
+                onSelectCategory = { category ->
+                    categoryDraft = category
+                    showCategoryPicker = false
+                },
+                onCreateCategory = { category ->
+                    categoryDraft = category.trim()
+                    showCategoryPicker = false
+                },
+                onClearCategory = {
+                    categoryDraft = ""
+                    showCategoryPicker = false
+                },
+                onCancel = {
+                    showCategoryPicker = false
+                }
+            )
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Transaction Detail") },
+                title = { Text(transaction.displayMerchantName ?: transaction.merchantRaw ?: "Transaction") },
                 navigationIcon = {
                     TextButton(onClick = onBack) {
                         Text("Back")
                     }
                 }
             )
-        }
+        },
+        containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
         LazyColumn(
             modifier = Modifier
@@ -2487,11 +3456,64 @@ fun TransactionDetailScreen(
         ) {
             item {
                 Spacer(modifier = Modifier.height(8.dp))
-
-                TransactionOverviewCard(
+                TransactionDetailHeaderCard(
                     transaction = transaction,
                     formatter = formatter
                 )
+            }
+
+            item {
+                TransactionFactsCard(
+                    transaction = transaction,
+                    rawAlert = rawAlert,
+                    formatter = formatter,
+                    showOriginalSms = showOriginalSms,
+                    onToggleOriginalSms = { showOriginalSms = !showOriginalSms }
+                )
+            }
+
+            item {
+                EditableTransactionDetailsCard(
+                    transaction = transaction,
+                    merchantDraft = merchantDraft,
+                    categoryDraft = categoryDraft,
+                    treatmentDraft = treatmentDraft,
+                    excludedDraft = excludedDraft,
+                    reviewStatusDraft = reviewStatusDraft,
+                    onMerchantChange = { merchantDraft = it },
+                    onChooseCategory = { showCategoryPicker = true },
+                    onTreatmentChange = { treatment ->
+                        treatmentDraft = treatment
+                        excludedDraft = TransactionTreatments.defaultExcludedFromSpending(treatment)
+                    },
+                    onExcludedChange = { excludedDraft = it },
+                    onReviewStatusChange = { reviewStatusDraft = it },
+                    onReviewStatusAction = {
+                        val nextStatus = if (reviewStatusDraft == "NEEDS_REVIEW") {
+                            "REVIEWED"
+                        } else {
+                            "NEEDS_REVIEW"
+                        }
+                        reviewStatusDraft = nextStatus
+                        onUpdateReviewStatus(nextStatus)
+                        saveMessage = if (nextStatus == "REVIEWED") {
+                            "Marked reviewed"
+                        } else {
+                            "Marked as needs review"
+                        }
+                    }
+                )
+            }
+
+            if (showSpendingAttributionByDefault) {
+                item {
+                    SpendingAttributionEditorCard(
+                        categoryDraft = categoryDraft,
+                        spendingMerchantDraft = spendingMerchantDraft,
+                        onChooseCategory = { showCategoryPicker = true },
+                        onSpendingMerchantChange = { spendingMerchantDraft = it }
+                    )
+                }
             }
 
             if (
@@ -2500,59 +3522,96 @@ fun TransactionDetailScreen(
             ) {
                 item {
                     TransferResolutionCard(
+                        transaction = transaction,
                         onMarkPersonalTransfer = {
-                            onUpdateTransactionType(TransactionTreatments.TRANSFER, true)
-                            onUpdateCategory("Transfer", "Personal")
+                            val treatment = if (transaction.accountingTreatment == TransactionTreatments.PERSON_TO_PERSON) {
+                                TransactionTreatments.PERSON_TO_PERSON
+                            } else {
+                                TransactionTreatments.TRANSFER
+                            }
+                            treatmentDraft = treatment
+                            excludedDraft = true
+                            categoryDraft = "Transfer"
+                            spendingMerchantDraft = ""
+                            reviewStatusDraft = "REVIEWED"
+                            onUpdateTransactionType(treatment, true)
+                            onUpdateSpendingAttribution("Transfer", "")
                             onUpdateReviewStatus("REVIEWED")
+                            saveMessage = "Saved as personal transfer"
                         },
-                        onMarkReimbursement = {
-                            onUpdateTransactionType(TransactionTreatments.INCOME, true)
-                            onUpdateCategory("Reimbursement", "Personal")
+                        onMarkReimbursement = { category, spendingMerchant ->
+                            treatmentDraft = TransactionTreatments.REIMBURSEMENT
+                            excludedDraft = false
+                            categoryDraft = category
+                            spendingMerchantDraft = spendingMerchant
+                            reviewStatusDraft = "REVIEWED"
+                            onUpdateTransactionType(TransactionTreatments.REIMBURSEMENT, false)
+                            onUpdateSpendingAttribution(category, spendingMerchant)
                             onUpdateReviewStatus("REVIEWED")
+                            saveMessage = "Saved as reimbursement"
                         },
-                        onMarkExpense = {
+                        onMarkExpense = { category, spendingMerchant ->
+                            treatmentDraft = TransactionTreatments.EXPENSE
+                            excludedDraft = false
+                            categoryDraft = category
+                            spendingMerchantDraft = spendingMerchant
+                            reviewStatusDraft = "REVIEWED"
                             onUpdateTransactionType(TransactionTreatments.EXPENSE, false)
-                            onUpdateCategory("Other", "Uncategorized")
+                            onUpdateSpendingAttribution(category, spendingMerchant)
                             onUpdateReviewStatus("REVIEWED")
+                            saveMessage = "Saved as shared expense"
+                        },
+                        onMarkIncomeGift = {
+                            treatmentDraft = TransactionTreatments.INCOME
+                            excludedDraft = true
+                            categoryDraft = "Income"
+                            spendingMerchantDraft = ""
+                            reviewStatusDraft = "REVIEWED"
+                            onUpdateTransactionType(TransactionTreatments.INCOME, true)
+                            onUpdateSpendingAttribution("Income", "")
+                            onUpdateReviewStatus("REVIEWED")
+                            saveMessage = "Saved as income or gift"
                         }
                     )
                 }
             }
 
             item {
-                TransactionCorrectionCard(
-                    transaction = transaction,
-                    onUpdateTransactionType = onUpdateTransactionType,
-                    onUpdateReviewStatus = onUpdateReviewStatus,
-                    onUpdateExcludedFromSpending = onUpdateExcludedFromSpending
-                )
+                Button(
+                    onClick = {
+                        if (merchantDraft != (transaction.displayMerchantName ?: transaction.merchantRaw ?: "")) {
+                            onUpdateMerchant(merchantDraft)
+                        }
+                        if (
+                            categoryDraft != transaction.categoryName.orEmpty() ||
+                            spendingMerchantDraft != transaction.spendingMerchantName.orEmpty()
+                        ) {
+                            onUpdateSpendingAttribution(categoryDraft, spendingMerchantDraft)
+                        }
+                        if (
+                            treatmentDraft != transaction.accountingTreatment ||
+                            excludedDraft != transaction.excludedFromSpending
+                        ) {
+                            onUpdateTransactionType(treatmentDraft, excludedDraft)
+                        }
+                        if (reviewStatusDraft != transaction.reviewStatus) {
+                            onUpdateReviewStatus(reviewStatusDraft)
+                        }
+                        saveMessage = "Saved changes"
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Save changes")
+                }
             }
 
-            item {
-                MerchantCorrectionCard(
-                    transaction = transaction,
-                    onUpdateMerchant = onUpdateMerchant
-                )
-            }
-
-            item {
-                CategoryCorrectionCard(
-                    transaction = transaction,
-                    onUpdateCategory = { category, subcategory ->
-                        onUpdateCategory(category, subcategory)
-                        onUpdateReviewStatus("REVIEWED")
-                    }
-                )
-            }
-
-            item {
-                SimilarTransactionsCorrectionCard(
-                    transaction = transaction,
-                    rawAlert = rawAlert,
-                    onApplyMerchantToSimilar = onApplyMerchantToSimilar,
-                    onApplyCurrentClassificationToSimilar = onApplyCurrentClassificationToSimilar,
-                    onApplyCategoryToSimilar = onApplyCategoryToSimilar
-                )
+            saveMessage?.let { message ->
+                item {
+                    InlineInfoPanel(
+                        title = "Saved",
+                        body = message
+                    )
+                }
             }
 
             item {
@@ -2560,11 +3619,22 @@ fun TransactionDetailScreen(
                     onClick = { showTechnicalDetails = !showTechnicalDetails },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(if (showTechnicalDetails) "Hide Details" else "Inspect Details")
+                    Text(if (showTechnicalDetails) "Hide advanced details" else "Advanced details")
                 }
             }
 
             if (showTechnicalDetails) {
+                if (!showSpendingAttributionByDefault) {
+                    item {
+                        SpendingAttributionEditorCard(
+                            categoryDraft = categoryDraft,
+                            spendingMerchantDraft = spendingMerchantDraft,
+                            onChooseCategory = { showCategoryPicker = true },
+                            onSpendingMerchantChange = { spendingMerchantDraft = it }
+                        )
+                    }
+                }
+
                 item {
                     TransactionTechnicalDetailsCard(
                         transaction = transaction,
@@ -2572,9 +3642,516 @@ fun TransactionDetailScreen(
                         formatter = formatter
                     )
                 }
+
+                item {
+                    SimilarTransactionsCorrectionCard(
+                        transaction = transaction,
+                        rawAlert = rawAlert,
+                        onApplyMerchantToSimilar = onApplyMerchantToSimilar,
+                        onApplyCurrentClassificationToSimilar = onApplyCurrentClassificationToSimilar,
+                        onApplyCategoryToSimilar = onApplyCategoryToSimilar
+                    )
+                }
+
+                item {
+                    OutlinedButton(
+                        onClick = {
+                            onOpenParserRuleEditor(
+                                buildMerchantAliasDraftForTransaction(
+                                    transaction = transaction,
+                                    rawAlert = rawAlert,
+                                    allTransactions = allTransactions,
+                                    includeCategory = false,
+                                    includeTreatment = false
+                                )
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Fix parser rule")
+                    }
+                }
             }
         }
     }
+}
+
+@Composable
+fun TransactionDetailHeaderCard(
+    transaction: TransactionEntity,
+    formatter: SimpleDateFormat
+) {
+    val merchant = transaction.displayMerchantName
+        ?: transaction.merchantRaw
+        ?: "Unknown merchant"
+    val category = transaction.categoryName?.takeIf { it.isNotBlank() }
+    val amount = transaction.amountCents / 100.0
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+        ) {
+            Surface(
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                contentColor = MaterialTheme.colorScheme.primary,
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+            ) {
+                Text(
+                    text = merchant.take(1).uppercase(Locale.US),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                )
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = merchant,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+                Text(
+                    text = formatter.format(Date(transaction.occurredAtEpochMs)),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (!category.isNullOrBlank()) {
+                    Text(
+                        text = category,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
+                Text(
+                    text = "$${"%.2f".format(amount)}",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                )
+                Text(
+                    text = treatmentLabel(transaction.accountingTreatment),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (transaction.reviewStatus == "NEEDS_REVIEW") {
+                    Text(
+                        text = "Needs review",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun TransactionFactsCard(
+    transaction: TransactionEntity,
+    rawAlert: RawAlertEntity?,
+    formatter: SimpleDateFormat,
+    showOriginalSms: Boolean,
+    onToggleOriginalSms: () -> Unit
+) {
+    val sourceText = listOfNotNull(
+        transaction.sourceInstitution,
+        transaction.accountHint?.let { "Account $it" }
+    ).joinToString(" - ").ifBlank { transaction.sourceKey }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "Transaction facts",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+            )
+            DetailRow("Amount", "$${"%.2f".format(transaction.amountCents / 100.0)}")
+            DetailRow("Date", formatter.format(Date(transaction.occurredAtEpochMs)))
+            DetailRow("Source / Account", sourceText)
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Original SMS",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                )
+                TextButton(onClick = onToggleOriginalSms) {
+                    Text(if (showOriginalSms) "Hide" else "View")
+                }
+            }
+
+            if (showOriginalSms) {
+                Text(
+                    text = rawAlert?.combinedText ?: "Original SMS was not found.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun EditableTransactionDetailsCard(
+    transaction: TransactionEntity,
+    merchantDraft: String,
+    categoryDraft: String,
+    treatmentDraft: String,
+    excludedDraft: Boolean,
+    reviewStatusDraft: String,
+    onMerchantChange: (String) -> Unit,
+    onChooseCategory: () -> Unit,
+    onTreatmentChange: (String) -> Unit,
+    onExcludedChange: (Boolean) -> Unit,
+    onReviewStatusChange: (String) -> Unit,
+    onReviewStatusAction: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "Edit details",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+            )
+
+            OutlinedTextField(
+                value = merchantDraft,
+                onValueChange = onMerchantChange,
+                label = { Text("Merchant") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            LedgerListRow(
+                title = "Category",
+                supportingText = if (categoryDraft.isBlank()) "Not assigned" else categoryDraft,
+                trailingText = "Choose",
+                leadingText = "C",
+                onClick = onChooseCategory
+            )
+
+            Text(
+                text = "Accounting treatment",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+            )
+            TreatmentSelector(
+                selectedTreatment = treatmentDraft,
+                onTreatmentSelected = onTreatmentChange,
+                treatments = listOf(
+                    TransactionTreatments.EXPENSE,
+                    TransactionTreatments.INCOME,
+                    TransactionTreatments.TRANSFER,
+                    TransactionTreatments.REFUND,
+                    TransactionTreatments.REIMBURSEMENT,
+                    TransactionTreatments.CREDIT_CARD_PAYMENT,
+                    TransactionTreatments.PERSON_TO_PERSON,
+                    TransactionTreatments.UNKNOWN
+                )
+            )
+
+            Text(
+                text = "Counts toward spending",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                TransactionFilterButton(
+                    label = "Count",
+                    selected = !excludedDraft,
+                    onClick = { onExcludedChange(false) },
+                    modifier = Modifier.weight(1f)
+                )
+                TransactionFilterButton(
+                    label = "Outside",
+                    selected = excludedDraft,
+                    onClick = { onExcludedChange(true) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            Text(
+                text = "Review status",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                TransactionFilterButton(
+                    label = "Reviewed",
+                    selected = reviewStatusDraft != "NEEDS_REVIEW",
+                    onClick = { onReviewStatusChange("REVIEWED") },
+                    modifier = Modifier.weight(1f)
+                )
+                TransactionFilterButton(
+                    label = "Needs review",
+                    selected = reviewStatusDraft == "NEEDS_REVIEW",
+                    onClick = { onReviewStatusChange("NEEDS_REVIEW") },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            OutlinedButton(
+                onClick = onReviewStatusAction,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    if (reviewStatusDraft == "NEEDS_REVIEW") {
+                        "Mark reviewed"
+                    } else {
+                        "Mark as needs review"
+                    }
+                )
+            }
+
+            val spendingImpact = TransactionTreatments.spendingImpactCents(
+                treatment = treatmentDraft,
+                excludedFromSpending = excludedDraft,
+                amountCents = transaction.amountCents
+            )
+            Text(
+                text = if (spendingImpact == 0L) {
+                    "Current spending impact: outside spending"
+                } else {
+                    "Current spending impact: ${formatSignedMoney(spendingImpact)}"
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+fun SpendingAttributionEditorCard(
+    categoryDraft: String,
+    spendingMerchantDraft: String,
+    onChooseCategory: () -> Unit,
+    onSpendingMerchantChange: (String) -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "Spending attribution",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+            )
+            Text(
+                text = "Use this when a person-to-person item should reduce or count toward a specific category or bill.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            LedgerListRow(
+                title = "Category",
+                supportingText = if (categoryDraft.isBlank()) "Not assigned" else categoryDraft,
+                trailingText = "Choose",
+                leadingText = "C",
+                onClick = onChooseCategory
+            )
+            OutlinedTextField(
+                value = spendingMerchantDraft,
+                onValueChange = onSpendingMerchantChange,
+                label = { Text("Spending merchant or bill (optional)") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+        }
+    }
+}
+
+@Composable
+fun TransactionCategoryPickerSheet(
+    options: List<String>,
+    selectedCategory: String,
+    onSelectCategory: (String) -> Unit,
+    onCreateCategory: (String) -> Unit,
+    onClearCategory: () -> Unit,
+    onCancel: () -> Unit
+) {
+    var searchText by remember { mutableStateOf("") }
+    var customCategory by remember { mutableStateOf("") }
+    val customCategoryIsSelectable = remember(customCategory) {
+        customCategory.isNotBlank() &&
+                !isVirtualUncategorizedCategory(customCategory) &&
+                !customCategory.equals("General", ignoreCase = true)
+    }
+
+    val visibleOptions = remember(options, searchText) {
+        val query = searchText.trim().lowercase(Locale.US)
+        if (query.isBlank()) {
+            options
+        } else {
+            options.filter { it.lowercase(Locale.US).contains(query) }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 18.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = "Select a category",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+        )
+        OutlinedTextField(
+            value = searchText,
+            onValueChange = { searchText = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Search categories") },
+            singleLine = true
+        )
+
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 300.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            items(
+                items = visibleOptions,
+                key = { it }
+            ) { option ->
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelectCategory(option) },
+                    color = if (option.equals(selectedCategory, ignoreCase = true)) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                    } else {
+                        MaterialTheme.colorScheme.surface
+                    },
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = option,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                        )
+                        if (option.equals(selectedCategory, ignoreCase = true)) {
+                            Text(
+                                text = "Selected",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        OutlinedTextField(
+            value = customCategory,
+            onValueChange = { customCategory = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Create new category") },
+            singleLine = true
+        )
+
+        OutlinedButton(
+            onClick = { onCreateCategory(customCategory) },
+            enabled = customCategoryIsSelectable,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Create and select")
+        }
+
+        OutlinedButton(
+            onClick = onClearCategory,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Clear category")
+        }
+
+        Button(
+            onClick = onCancel,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Cancel")
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+    }
+}
+
+fun transactionCategoryOptions(transactions: List<TransactionEntity>): List<String> {
+    val presets = listOf(
+        "Groceries",
+        "Restaurants",
+        "Shopping",
+        "Subscriptions",
+        "Bills & Utilities",
+        "Gas",
+        "Healthcare",
+        "Travel",
+        "Entertainment",
+        "Charity",
+        "Home",
+        "Personal Care",
+        "Insurance",
+        "Other"
+    )
+    val existing = transactions.mapNotNull { it.categoryName?.takeIf { category -> category.isNotBlank() } }
+    return (presets + existing)
+        .filterNot {
+            isVirtualUncategorizedCategory(it) ||
+                    it.equals("General", ignoreCase = true)
+        }
+        .distinctBy { it.lowercase(Locale.US) }
+        .sortedWith(compareBy<String> { category ->
+            presets.indexOfFirst { it.equals(category, ignoreCase = true) }.let { if (it == -1) Int.MAX_VALUE else it }
+        }.thenBy { it.lowercase(Locale.US) })
 }
 
 @Composable
@@ -2586,19 +4163,23 @@ fun TransactionOverviewCard(
     val merchant = transaction.displayMerchantName
         ?: transaction.merchantRaw
         ?: "Unknown merchant"
+    val spendingMerchant = transaction.spendingMerchantName?.takeIf { it.isNotBlank() }
     val category = if (transaction.categoryName.isNullOrBlank()) {
-        "Uncategorized"
+        "Not assigned"
     } else {
-        transaction.categoryName +
-                if (!transaction.subcategoryName.isNullOrBlank()) {
-                    " / ${transaction.subcategoryName}"
-                } else {
-                    ""
-                }
+        transaction.categoryName
     }
+    val spendingImpact = TransactionTreatments.spendingImpactCents(
+        treatment = transaction.accountingTreatment,
+        excludedFromSpending = transaction.excludedFromSpending,
+        amountCents = transaction.amountCents
+    )
 
-    Card(
-        modifier = Modifier.fillMaxWidth()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
     ) {
         Column(
             modifier = Modifier.padding(12.dp)
@@ -2619,7 +4200,21 @@ fun TransactionOverviewCard(
             Text("${treatmentLabel(transaction.accountingTreatment)} - $category")
             Text(formatter.format(Date(transaction.occurredAtEpochMs)))
 
-            if (transaction.excludedFromSpending) {
+            if (!spendingMerchant.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Spending merchant: $spendingMerchant",
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
+
+            if (spendingImpact != 0L) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Spending impact: ${formatSignedMoney(spendingImpact)}",
+                    style = MaterialTheme.typography.labelMedium
+                )
+            } else {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "Tracked outside Spending Summary",
@@ -2645,8 +4240,11 @@ fun TransactionTechnicalDetailsCard(
     rawAlert: RawAlertEntity?,
     formatter: SimpleDateFormat
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
     ) {
         Column(
             modifier = Modifier.padding(12.dp)
@@ -2659,6 +4257,8 @@ fun TransactionTechnicalDetailsCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             DetailRow("Merchant raw", transaction.merchantRaw ?: "Not detected")
+            DetailRow("Display merchant", transaction.displayMerchantName ?: "Not set")
+            DetailRow("Spending merchant", transaction.spendingMerchantName ?: "Not set")
             DetailRow("Source institution", transaction.sourceInstitution ?: "Not detected")
             DetailRow("Account hint", transaction.accountHint ?: "Not detected")
             DetailRow("Review status", transaction.reviewStatus)
@@ -2697,12 +4297,24 @@ fun TransactionTechnicalDetailsCard(
 
 @Composable
 fun TransferResolutionCard(
+    transaction: TransactionEntity,
     onMarkPersonalTransfer: () -> Unit,
-    onMarkReimbursement: () -> Unit,
-    onMarkExpense: () -> Unit
+    onMarkReimbursement: (String, String) -> Unit,
+    onMarkExpense: (String, String) -> Unit,
+    onMarkIncomeGift: () -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
+    var categoryText by remember(transaction.id, transaction.categoryName) {
+        mutableStateOf(transaction.categoryName ?: "Bills & Utilities")
+    }
+    var spendingMerchantText by remember(transaction.id, transaction.spendingMerchantName) {
+        mutableStateOf(transaction.spendingMerchantName ?: "")
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
     ) {
         Column(
             modifier = Modifier.padding(12.dp)
@@ -2721,6 +4333,26 @@ fun TransferResolutionCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
+            OutlinedTextField(
+                value = categoryText,
+                onValueChange = { categoryText = it },
+                label = { Text("Spending category") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = spendingMerchantText,
+                onValueChange = { spendingMerchantText = it },
+                label = { Text("Spending merchant or bill (optional)") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
             Button(
                 onClick = onMarkPersonalTransfer,
                 modifier = Modifier.fillMaxWidth()
@@ -2735,18 +4367,37 @@ fun TransferResolutionCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 OutlinedButton(
-                    onClick = onMarkReimbursement,
+                    onClick = {
+                        onMarkReimbursement(
+                            categoryText.ifBlank { "Other" },
+                            spendingMerchantText
+                        )
+                    },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Reimbursement")
+                    Text("Reimbursement received")
                 }
 
                 OutlinedButton(
-                    onClick = onMarkExpense,
+                    onClick = {
+                        onMarkExpense(
+                            categoryText.ifBlank { "Other" },
+                            spendingMerchantText
+                        )
+                    },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Count as Spending")
+                    Text("Shared expense paid")
                 }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = onMarkIncomeGift,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Income or Gift")
             }
         }
     }
@@ -2779,8 +4430,11 @@ fun TransactionCorrectionCard(
     onUpdateReviewStatus: (String) -> Unit,
     onUpdateExcludedFromSpending: (Boolean) -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
     ) {
         Column(
             modifier = Modifier.padding(12.dp)
@@ -2846,7 +4500,7 @@ fun TransactionCorrectionCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Button(
-                    onClick = { onUpdateTransactionType(TransactionTreatments.REFUND, true) },
+                    onClick = { onUpdateTransactionType(TransactionTreatments.REFUND, false) },
                     modifier = Modifier.weight(1f)
                 ) {
                     Text("Refund")
@@ -2858,6 +4512,15 @@ fun TransactionCorrectionCard(
                 ) {
                     Text("Person")
                 }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            OutlinedButton(
+                onClick = { onUpdateTransactionType(TransactionTreatments.REIMBURSEMENT, false) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Reimbursement")
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -2927,21 +4590,25 @@ fun TransactionCorrectionCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            val spendingImpact = TransactionTreatments.spendingImpactCents(
+                treatment = transaction.accountingTreatment,
+                excludedFromSpending = transaction.excludedFromSpending,
+                amountCents = transaction.amountCents
+            )
+            val spendingState = if (spendingImpact == 0L) {
+                "Outside spending"
+            } else {
+                "Spending impact ${formatSignedMoney(spendingImpact)}"
+            }
+
             Text(
-                text = "Current: ${treatmentLabel(transaction.accountingTreatment)} • ${transaction.reviewStatus} • ${
-                    if (transaction.excludedFromSpending) "Outside spending" else "Spending"
-                }",
+                text = "Current: ${treatmentLabel(transaction.accountingTreatment)} - ${transaction.reviewStatus} - $spendingState",
                 style = MaterialTheme.typography.labelSmall
             )
 
             if (!transaction.categoryName.isNullOrBlank()) {
                 Text(
-                    text = "Category: ${transaction.categoryName}" +
-                            if (!transaction.subcategoryName.isNullOrBlank()) {
-                                " / ${transaction.subcategoryName}"
-                            } else {
-                                ""
-                            },
+                    text = "Category: ${transaction.categoryName}",
                     style = MaterialTheme.typography.labelSmall
                 )
             }
@@ -2952,7 +4619,8 @@ fun TransactionCorrectionCard(
 @Composable
 fun MerchantCorrectionCard(
     transaction: TransactionEntity,
-    onUpdateMerchant: (String) -> Unit
+    onUpdateMerchant: (String) -> Unit,
+    onOpenParserRuleEditor: (() -> Unit)? = null
 ) {
     var merchantText by remember(transaction.id, transaction.displayMerchantName, transaction.merchantRaw) {
         mutableStateOf(
@@ -2962,8 +4630,11 @@ fun MerchantCorrectionCard(
         )
     }
 
-    Card(
-        modifier = Modifier.fillMaxWidth()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
     ) {
         Column(
             modifier = Modifier.padding(12.dp)
@@ -2971,6 +4642,14 @@ fun MerchantCorrectionCard(
             Text(
                 text = "Merchant / Payee",
                 style = MaterialTheme.typography.titleMedium
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = "Edit display name changes this transaction only. Use parser rules when the SMS wording should be recognized in the future.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -2991,7 +4670,18 @@ fun MerchantCorrectionCard(
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Save Merchant")
+                Text("Save Display Name")
+            }
+
+            if (onOpenParserRuleEditor != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedButton(
+                    onClick = onOpenParserRuleEditor,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Fix Parser Rule")
+                }
             }
 
             Spacer(modifier = Modifier.height(6.dp))
@@ -3014,7 +4704,7 @@ fun SimilarTransactionsCorrectionCard(
     rawAlert: RawAlertEntity?,
     onApplyMerchantToSimilar: (String, String, (Int) -> Unit) -> Unit,
     onApplyCurrentClassificationToSimilar: (String, (Int) -> Unit) -> Unit,
-    onApplyCategoryToSimilar: (String, String, String, (Int) -> Unit) -> Unit
+    onApplyCategoryToSimilar: (String, String, (Int) -> Unit) -> Unit
 ) {
     var matchPhrase by remember(transaction.id, rawAlert?.combinedText) {
         mutableStateOf(
@@ -3036,16 +4726,15 @@ fun SimilarTransactionsCorrectionCard(
         mutableStateOf(transaction.categoryName ?: "")
     }
 
-    var subcategoryText by remember(transaction.id, transaction.subcategoryName) {
-        mutableStateOf(transaction.subcategoryName ?: "")
-    }
-
     var resultText by remember(transaction.id) {
         mutableStateOf("")
     }
 
-    Card(
-        modifier = Modifier.fillMaxWidth()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
     ) {
         Column(
             modifier = Modifier.padding(12.dp)
@@ -3131,24 +4820,13 @@ fun SimilarTransactionsCorrectionCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            OutlinedTextField(
-                value = subcategoryText,
-                onValueChange = { subcategoryText = it },
-                label = { Text("Subcategory to apply") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
             Button(
                 onClick = {
                     resultText = "Applying category to similar transactions..."
 
                     onApplyCategoryToSimilar(
                         matchPhrase,
-                        categoryText,
-                        subcategoryText
+                        categoryText
                     ) { updatedCount ->
                         resultText = "Updated category on $updatedCount similar transactions."
                     }
@@ -3160,9 +4838,14 @@ fun SimilarTransactionsCorrectionCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            val currentImpact = TransactionTreatments.spendingImpactCents(
+                treatment = transaction.accountingTreatment,
+                excludedFromSpending = transaction.excludedFromSpending,
+                amountCents = transaction.amountCents
+            )
             Text(
-                text = "Current classification: ${treatmentLabel(transaction.accountingTreatment)} • ${transaction.reviewStatus} • ${
-                    if (transaction.excludedFromSpending) "Outside spending" else "Spending"
+                text = "Current classification: ${treatmentLabel(transaction.accountingTreatment)} - ${transaction.reviewStatus} - ${
+                    if (currentImpact == 0L) "Outside spending" else "Impact ${formatSignedMoney(currentImpact)}"
                 }",
                 style = MaterialTheme.typography.labelSmall
             )
@@ -3170,8 +4853,6 @@ fun SimilarTransactionsCorrectionCard(
             Text(
                 text = "Current category: ${
                     transaction.categoryName ?: "Not assigned"
-                } / ${
-                    transaction.subcategoryName ?: "Not assigned"
                 }",
                 style = MaterialTheme.typography.labelSmall
             )
@@ -3210,27 +4891,29 @@ fun CategoryCorrectionCard(
     var categoryText by remember(transaction.id, transaction.categoryName) {
         mutableStateOf(transaction.categoryName ?: "")
     }
-
-    var subcategoryText by remember(transaction.id, transaction.subcategoryName) {
-        mutableStateOf(transaction.subcategoryName ?: "")
+    var spendingMerchantText by remember(transaction.id, transaction.spendingMerchantName) {
+        mutableStateOf(transaction.spendingMerchantName ?: "")
     }
 
     val presets = listOf(
-        "Groceries" to "General",
-        "Restaurants" to "Dining Out",
-        "Gas" to "Fuel",
-        "Shopping" to "General",
-        "Bills & Utilities" to "General",
-        "Subscriptions" to "General",
-        "Healthcare" to "General",
-        "Travel" to "General",
-        "Charity" to "Donation",
-        "Transfer" to "Internal",
-        "Other" to "Uncategorized"
+        "Groceries",
+        "Restaurants",
+        "Gas",
+        "Shopping",
+        "Bills & Utilities",
+        "Subscriptions",
+        "Healthcare",
+        "Travel",
+        "Charity",
+        "Transfer",
+        "Other"
     )
 
-    Card(
-        modifier = Modifier.fillMaxWidth()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
     ) {
         Column(
             modifier = Modifier.padding(12.dp)
@@ -3257,13 +4940,12 @@ fun CategoryCorrectionCard(
                     rowItems.forEach { preset ->
                         OutlinedButton(
                             onClick = {
-                                categoryText = preset.first
-                                subcategoryText = preset.second
-                                onUpdateCategory(categoryText, subcategoryText)
+                                categoryText = preset
+                                onUpdateCategory(categoryText, spendingMerchantText)
                             },
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text(preset.first)
+                            Text(preset)
                         }
                     }
 
@@ -3288,9 +4970,9 @@ fun CategoryCorrectionCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             OutlinedTextField(
-                value = subcategoryText,
-                onValueChange = { subcategoryText = it },
-                label = { Text("Subcategory") },
+                value = spendingMerchantText,
+                onValueChange = { spendingMerchantText = it },
+                label = { Text("Spending merchant or bill (optional)") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true
             )
@@ -3299,11 +4981,11 @@ fun CategoryCorrectionCard(
 
             Button(
                 onClick = {
-                    onUpdateCategory(categoryText, subcategoryText)
+                    onUpdateCategory(categoryText, spendingMerchantText)
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Save Category")
+                Text("Save Spending Attribution")
             }
 
             Spacer(modifier = Modifier.height(6.dp))
@@ -3311,11 +4993,16 @@ fun CategoryCorrectionCard(
             Text(
                 text = "Current: ${
                     transaction.categoryName ?: "Not assigned"
-                } / ${
-                    transaction.subcategoryName ?: "Not assigned"
                 }",
                 style = MaterialTheme.typography.labelSmall
             )
+
+            if (!transaction.spendingMerchantName.isNullOrBlank()) {
+                Text(
+                    text = "Spending merchant: ${transaction.spendingMerchantName}",
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
         }
     }
 }
@@ -3325,6 +5012,8 @@ fun CategoryCorrectionCard(
 @Composable
 fun SpendingSummaryScreen(
     transactions: List<TransactionEntity>,
+    onNavigate: (AppScreen) -> Unit,
+    onQuickActions: () -> Unit,
     onBack: () -> Unit,
     onTransactionSelected: (TransactionEntity) -> Unit
 ) {
@@ -3340,45 +5029,95 @@ fun SpendingSummaryScreen(
         getNextMonthStartEpochMs(selectedMonthStart)
     }
 
+    val previousMonthStart = remember(selectedMonthStart) {
+        getPreviousMonthStartEpochMs(selectedMonthStart)
+    }
+
     val includedExpensesForMonth = remember(transactions, selectedMonthStart, selectedMonthEnd) {
-        transactions
-            .filter {
-                TransactionTreatments.countsAsSpending(
-                    treatment = it.accountingTreatment,
-                    excludedFromSpending = it.excludedFromSpending
-                )
-            }
-            .filter {
-                it.occurredAtEpochMs >= selectedMonthStart &&
-                        it.occurredAtEpochMs < selectedMonthEnd
-            }
+        expenseTransactionsForRange(
+            transactions = transactions,
+            startEpochMs = selectedMonthStart,
+            endEpochMs = selectedMonthEnd
+        )
+    }
+
+    val previousMonthExpenses = remember(transactions, previousMonthStart, selectedMonthStart) {
+        expenseTransactionsForRange(
+            transactions = transactions,
+            startEpochMs = previousMonthStart,
+            endEpochMs = selectedMonthStart
+        )
     }
 
     val totalExpenseCents = remember(includedExpensesForMonth) {
-        includedExpensesForMonth.sumOf { it.amountCents }
+        includedExpensesForMonth.sumOf {
+            TransactionTreatments.spendingImpactCents(
+                treatment = it.accountingTreatment,
+                excludedFromSpending = it.excludedFromSpending,
+                amountCents = it.amountCents
+            )
+        }
+    }
+
+    val previousMonthSpendingCents = remember(previousMonthExpenses) {
+        previousMonthExpenses.sumOf {
+            TransactionTreatments.spendingImpactCents(
+                treatment = it.accountingTreatment,
+                excludedFromSpending = it.excludedFromSpending,
+                amountCents = it.amountCents
+            )
+        }
+    }
+
+    val grossExpenseCents = remember(includedExpensesForMonth) {
+        includedExpensesForMonth
+            .filter { it.accountingTreatment == TransactionTreatments.EXPENSE }
+            .sumOf { it.amountCents }
+    }
+
+    val offsetCents = remember(includedExpensesForMonth) {
+        includedExpensesForMonth.sumOf {
+            val impact = TransactionTreatments.spendingImpactCents(
+                treatment = it.accountingTreatment,
+                excludedFromSpending = it.excludedFromSpending,
+                amountCents = it.amountCents
+            )
+            if (impact < 0) -impact else 0
+        }
     }
 
     val unassignedCount = remember(includedExpensesForMonth) {
-        includedExpensesForMonth.count { it.categoryName.isNullOrBlank() }
+        includedExpensesForMonth.count { isVirtualUncategorizedCategory(it.categoryName) }
+    }
+
+    val unassignedAmountCents = remember(includedExpensesForMonth) {
+        includedExpensesForMonth
+            .filter { isVirtualUncategorizedCategory(it.categoryName) }
+            .sumOf {
+                TransactionTreatments.spendingImpactCents(
+                    treatment = it.accountingTreatment,
+                    excludedFromSpending = it.excludedFromSpending,
+                    amountCents = it.amountCents
+                )
+            }
     }
 
     val categorySummaries = remember(includedExpensesForMonth) {
-        includedExpensesForMonth
-            .groupBy {
-                Pair(
-                    it.categoryName ?: "Unassigned",
-                    it.subcategoryName
-                )
-            }
-            .map { (key, group) ->
-                CategorySpendSummary(
-                    categoryName = key.first,
-                    subcategoryName = key.second,
-                    amountCents = group.sumOf { it.amountCents },
-                    transactionCount = group.size
-                )
-            }
-            .sortedByDescending { it.amountCents }
+        categorySpendSummaries(includedExpensesForMonth)
+    }
+
+    val categoryBarTotalCents = remember(categorySummaries) {
+        categorySummaries.sumOf { kotlin.math.abs(it.amountCents) }
+    }
+
+    val topMerchantSummaries = remember(includedExpensesForMonth) {
+        merchantSummaries(includedExpensesForMonth)
+            .filter { it.spendingAmountCents != 0L }
+            .take(5)
+    }
+
+    val trendText = remember(totalExpenseCents, previousMonthSpendingCents) {
+        spendingTrendText(totalExpenseCents, previousMonthSpendingCents)
     }
 
     val selectedCategoryTransactions = remember(
@@ -3392,14 +5131,16 @@ fun SpendingSummaryScreen(
         } else {
             includedExpensesForMonth
                 .filter {
-                    val category = it.categoryName ?: "Unassigned"
-                    val subcategory = it.subcategoryName
+                    val category = displayCategoryName(it.categoryName)
 
-                    category == selected.categoryName &&
-                            subcategory == selected.subcategoryName
+                    category == selected.categoryName
                 }
                 .sortedByDescending { it.occurredAtEpochMs }
         }
+    }
+
+    BackHandler(enabled = selectedCategorySummary != null) {
+        selectedCategorySummary = null
     }
 
     if (selectedCategorySummary != null) {
@@ -3413,17 +5154,12 @@ fun SpendingSummaryScreen(
             onTransactionSelected = onTransactionSelected
         )
     } else {
-        Scaffold(
-            topBar = {
-                TopAppBar(
-                    title = { Text("Spending Summary") },
-                    navigationIcon = {
-                        TextButton(onClick = onBack) {
-                            Text("Back")
-                        }
-                    }
-                )
-            }
+        LedgerAppScaffold(
+            title = "Spending",
+            activeScreen = AppScreen.SUMMARY,
+            onNavigate = onNavigate,
+            onQuickActions = onQuickActions,
+            onBack = onBack
         ) { padding ->
             LazyColumn(
                 modifier = Modifier
@@ -3456,38 +5192,49 @@ fun SpendingSummaryScreen(
                 item {
                     SpendingSummaryTopCard(
                         totalExpenseCents = totalExpenseCents,
+                        grossExpenseCents = grossExpenseCents,
+                        offsetCents = offsetCents,
                         includedExpenseCount = includedExpensesForMonth.size,
-                        unassignedCount = unassignedCount
+                        trendText = trendText
+                    )
+                }
+
+                if (unassignedCount > 0) {
+                    item {
+                        UnassignedSpendingCallout(
+                            transactionCount = unassignedCount,
+                            amountCents = unassignedAmountCents,
+                            onClick = {
+                                onNavigate(AppScreen.REVIEW_QUEUE)
+                            }
+                        )
+                    }
+                }
+
+                item {
+                    SpendingCategoryBreakdownPanel(
+                        categorySummaries = categorySummaries,
+                        chartSummaries = categorySummaries,
+                        totalExpenseCents = totalExpenseCents,
+                        totalActivityCents = categoryBarTotalCents,
+                        onCategorySelected = { summary ->
+                            selectedCategorySummary = summary
+                        }
                     )
                 }
 
                 item {
-                    Text(
-                        text = "Spend by Category",
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
-                }
-
-                if (categorySummaries.isEmpty()) {
-                    item {
-                        EmptySectionText(
-                            "No expense transactions counted in this month yet. Mark transactions as Expense and assign categories."
-                        )
-                    }
-                } else {
-                    items(
-                        items = categorySummaries,
-                        key = { "${it.categoryName}|${it.subcategoryName ?: ""}" }
-                    ) { summary ->
-                        CategorySpendCard(
-                            summary = summary,
-                            totalAmountCents = totalExpenseCents,
-                            onClick = {
-                                selectedCategorySummary = summary
+                    TopMerchantsPanel(
+                        merchants = topMerchantSummaries,
+                        onMerchantSelected = { merchantName ->
+                            val transaction = includedExpensesForMonth.firstOrNull {
+                                merchantSummaryName(it).equals(merchantName, ignoreCase = true)
                             }
+                            if (transaction != null) {
+                                onTransactionSelected(transaction)
+                            }
+                        }
                         )
-                    }
                 }
             }
         }
@@ -3497,109 +5244,283 @@ fun SpendingSummaryScreen(
 @Composable
 fun SpendingSummaryTopCard(
     totalExpenseCents: Long,
+    grossExpenseCents: Long,
+    offsetCents: Long,
     includedExpenseCount: Int,
-    unassignedCount: Int
+    trendText: String
 ) {
-    val total = totalExpenseCents / 100.0
-
-    Card(
-        modifier = Modifier.fillMaxWidth()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
     ) {
         Column(
-            modifier = Modifier.padding(12.dp)
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(
-                text = "Spending",
-                style = MaterialTheme.typography.titleMedium
+                text = "Total spending",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
-
             Text(
-                text = "$${"%.2f".format(total)}",
-                style = MaterialTheme.typography.headlineSmall
+                text = formatSignedMoney(totalExpenseCents),
+                style = MaterialTheme.typography.headlineLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
             )
 
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Text("Transactions counted as spending: $includedExpenseCount")
-            Text("Unassigned category transactions: $unassignedCount")
-
-            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = trendText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
 
             Text(
-                text = "This view counts expenses only. Payments, transfers, income, and refunds are tracked separately.",
-                style = MaterialTheme.typography.labelSmall
+                text = if (offsetCents > 0) {
+                    "$includedExpenseCount transactions - ${formatSignedMoney(grossExpenseCents)} gross · ${formatSignedMoney(offsetCents)} offsets"
+                } else {
+                    "$includedExpenseCount spending transactions"
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
 }
 
 @Composable
-fun CategorySpendCard(
-    summary: CategorySpendSummary,
-    totalAmountCents: Long,
-    onClick: () -> Unit
+fun SpendingCategoryBreakdownPanel(
+    categorySummaries: List<CategorySpendSummary>,
+    chartSummaries: List<CategorySpendSummary>,
+    totalExpenseCents: Long,
+    totalActivityCents: Long,
+    onCategorySelected: (CategorySpendSummary) -> Unit
 ) {
-    val amount = summary.amountCents / 100.0
-    val share = if (totalAmountCents > 0) {
-        summary.amountCents.toFloat() / totalAmountCents.toFloat()
-    } else {
-        0f
-    }
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
     ) {
         Column(
-            modifier = Modifier.padding(12.dp)
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Text(
-                text = if (summary.subcategoryName.isNullOrBlank()) {
-                    summary.categoryName
-                } else {
-                    "${summary.categoryName} / ${summary.subcategoryName}"
-                },
-                style = MaterialTheme.typography.titleSmall
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "$${"%.2f".format(amount)}",
-                style = MaterialTheme.typography.bodyLarge
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(share.coerceIn(0f, 1f))
-                        .height(6.dp)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(MaterialTheme.colorScheme.primary)
+                Text(
+                    text = "Spending by category",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                )
+
+                Text(
+                    text = "${categorySummaries.size} categories",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
                 )
             }
 
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "Transactions: ${summary.transactionCount} - ${"%.0f".format(share * 100)}%",
-                style = MaterialTheme.typography.labelSmall
+            SpendingDonutChart(
+                summaries = chartSummaries,
+                centerText = formatSignedMoney(totalExpenseCents),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1.25f)
+                    .padding(horizontal = 12.dp)
             )
 
+            if (categorySummaries.isEmpty()) {
+                Text(
+                    text = "Assign categories to see your spending breakdown.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                categorySummaries.forEachIndexed { index, summary ->
+                    SpendingCategoryListRow(
+                        summary = summary,
+                        totalAmountCents = totalActivityCents,
+                        accentColor = spendingCategoryColor(summary.categoryName, index),
+                        onClick = { onCategorySelected(summary) }
+                    )
+
+                    if (index != categorySummaries.lastIndex) {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SpendingDonutChart(
+    summaries: List<CategorySpendSummary>,
+    centerText: String,
+    modifier: Modifier = Modifier
+) {
+    val slices = summaries
+        .filter { kotlin.math.abs(it.amountCents) > 0L }
+        .take(7)
+    val total = slices.sumOf { kotlin.math.abs(it.amountCents) }
+
+    Box(
+        modifier = modifier,
+        contentAlignment = androidx.compose.ui.Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val diameter = minOf(size.width, size.height) * 0.78f
+            val strokeWidth = diameter * 0.18f
+            val topLeft = androidx.compose.ui.geometry.Offset(
+                x = (size.width - diameter) / 2f,
+                y = (size.height - diameter) / 2f
+            )
+            val arcSize = Size(diameter, diameter)
+
+            if (total <= 0L) {
+                drawArc(
+                    color = Color(0xFFE9EEF0),
+                    startAngle = -90f,
+                    sweepAngle = 360f,
+                    useCenter = false,
+                    topLeft = topLeft,
+                    size = arcSize,
+                    style = Stroke(width = strokeWidth, cap = StrokeCap.Butt)
+                )
+            } else {
+                var startAngle = -90f
+                slices.forEachIndexed { index, summary ->
+                    val sweep = (kotlin.math.abs(summary.amountCents).toFloat() / total.toFloat()) * 360f
+                    drawArc(
+                        color = spendingCategoryColor(summary.categoryName, index),
+                        startAngle = startAngle,
+                        sweepAngle = (sweep - 1.2f).coerceAtLeast(0f),
+                        useCenter = false,
+                        topLeft = topLeft,
+                        size = arcSize,
+                        style = Stroke(width = strokeWidth, cap = StrokeCap.Butt)
+                    )
+                    startAngle += sweep
+                }
+            }
+        }
+
+        Column(
+            horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
+        ) {
             Text(
-                text = "Tap to view transactions",
-                style = MaterialTheme.typography.labelSmall
+                text = centerText,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+            )
+            Text(
+                text = "Total",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+fun SpendingCategoryListRow(
+    summary: CategorySpendSummary,
+    totalAmountCents: Long,
+    accentColor: Color,
+    onClick: () -> Unit
+) {
+    val share = if (totalAmountCents > 0) {
+        kotlin.math.abs(summary.amountCents).toFloat() / totalAmountCents.toFloat()
+    } else {
+        0f
+    }
+    val offsetText = if (summary.refundOffsetCents > 0) {
+        " - ${formatSignedMoney(-summary.refundOffsetCents)} offsets"
+    } else {
+        ""
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                Surface(
+                    color = accentColor.copy(alpha = 0.14f),
+                    contentColor = accentColor,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = categoryGlyph(summary.categoryName),
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp)
+                    )
+                }
+
+                Column {
+                    Text(
+                        text = summary.categoryName,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "${summary.transactionCount} transactions$offsetText",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
+                Text(
+                    text = formatSignedMoney(summary.amountCents),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                )
+                Text(
+                    text = "${"%.1f".format(share * 100)}%",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(5.dp)
+                .background(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp)
+                )
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(share.coerceIn(0f, 1f))
+                    .height(5.dp)
+                    .background(
+                        color = accentColor,
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp)
+                    )
             )
         }
     }
@@ -3612,103 +5533,289 @@ fun MonthSelectorCard(
     onNextMonth: () -> Unit,
     onCurrentMonth: () -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = Color.Transparent,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
     ) {
-        Column(
-            modifier = Modifier.padding(12.dp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
         ) {
-            Text(
-                text = "Selected Month",
-                style = MaterialTheme.typography.titleSmall
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
+            OutlinedButton(onClick = onPreviousMonth) {
+                Text("<")
+            }
 
             Text(
                 text = formatMonthYear(monthStartEpochMs),
-                style = MaterialTheme.typography.headlineSmall
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            TextButton(onClick = onCurrentMonth) {
+                Text("This month")
+            }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            OutlinedButton(onClick = onNextMonth) {
+                Text(">")
+            }
+        }
+    }
+}
+
+@Composable
+fun UnassignedSpendingCallout(
+    transactionCount: Int,
+    amountCents: Long,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        color = Color(0xFFFFF8E8),
+        contentColor = Color(0xFF4F3411),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+        ) {
+            Surface(
+                color = Color(0xFFFFE4AD),
+                contentColor = Color(0xFFC17500),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
             ) {
-                OutlinedButton(
-                    onClick = onPreviousMonth,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Previous")
-                }
+                Text(
+                    text = "!",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp)
+                )
+            }
 
-                OutlinedButton(
-                    onClick = onCurrentMonth,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Current")
-                }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Uncategorized spending",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                )
+                Text(
+                    text = "$transactionCount transactions need a category",
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
 
-                OutlinedButton(
-                    onClick = onNextMonth,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Next")
+            Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
+                Text(
+                    text = formatSignedMoney(amountCents),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                )
+                Text(
+                    text = "Review",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun TopMerchantsPanel(
+    merchants: List<MerchantSummary>,
+    onMerchantSelected: (String) -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = "Top merchants",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+            )
+
+            if (merchants.isEmpty()) {
+                Text(
+                    text = "No merchant spending for this month yet.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            } else {
+                merchants.forEachIndexed { index, merchant ->
+                    TopMerchantRow(
+                        merchant = merchant,
+                        accentColor = merchantAccentColor(merchant.merchantName, index),
+                        onClick = { onMerchantSelected(merchant.merchantName) }
+                    )
+                    if (index != merchants.lastIndex) {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                    }
                 }
             }
         }
     }
 }
 
-fun getCurrentMonthStartEpochMs(): Long {
-    val calendar = Calendar.getInstance()
-    calendar.set(Calendar.DAY_OF_MONTH, 1)
-    calendar.set(Calendar.HOUR_OF_DAY, 0)
-    calendar.set(Calendar.MINUTE, 0)
-    calendar.set(Calendar.SECOND, 0)
-    calendar.set(Calendar.MILLISECOND, 0)
-    return calendar.timeInMillis
+@Composable
+fun TopMerchantRow(
+    merchant: MerchantSummary,
+    accentColor: Color,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+    ) {
+        Surface(
+            color = accentColor.copy(alpha = 0.14f),
+            contentColor = accentColor,
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+        ) {
+            Text(
+                text = merchant.merchantName.trim().take(1).uppercase(Locale.US).ifBlank { "?" },
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp)
+            )
+        }
+
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            Text(
+                text = merchant.merchantName,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+            Text(
+                text = listOfNotNull(
+                    merchant.categoryName?.takeIf { !isVirtualUncategorizedCategory(it) },
+                    "${merchant.transactionCount} transactions"
+                ).joinToString(" - "),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+        }
+
+        Text(
+            text = formatSignedMoney(merchant.spendingAmountCents),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+        )
+    }
 }
 
-fun getNextMonthStartEpochMs(monthStartEpochMs: Long): Long {
-    val calendar = Calendar.getInstance()
-    calendar.timeInMillis = monthStartEpochMs
-    calendar.add(Calendar.MONTH, 1)
-    calendar.set(Calendar.DAY_OF_MONTH, 1)
-    calendar.set(Calendar.HOUR_OF_DAY, 0)
-    calendar.set(Calendar.MINUTE, 0)
-    calendar.set(Calendar.SECOND, 0)
-    calendar.set(Calendar.MILLISECOND, 0)
-    return calendar.timeInMillis
+fun spendingTrendText(currentCents: Long, previousCents: Long): String {
+    if (currentCents == 0L && previousCents == 0L) {
+        return "No spending activity for this month yet"
+    }
+    if (previousCents == 0L) {
+        return "No previous month spending to compare"
+    }
+
+    val difference = currentCents - previousCents
+    if (difference == 0L) {
+        return "Same as previous month"
+    }
+
+    val percentage = kotlin.math.abs(difference).toDouble() / kotlin.math.abs(previousCents).toDouble() * 100.0
+    return if (difference < 0) {
+        "Down ${"%.1f".format(percentage)}% from previous month"
+    } else {
+        "Up ${"%.1f".format(percentage)}% from previous month"
+    }
 }
 
-fun getPreviousMonthStartEpochMs(monthStartEpochMs: Long): Long {
-    val calendar = Calendar.getInstance()
-    calendar.timeInMillis = monthStartEpochMs
-    calendar.add(Calendar.MONTH, -1)
-    calendar.set(Calendar.DAY_OF_MONTH, 1)
-    calendar.set(Calendar.HOUR_OF_DAY, 0)
-    calendar.set(Calendar.MINUTE, 0)
-    calendar.set(Calendar.SECOND, 0)
-    calendar.set(Calendar.MILLISECOND, 0)
-    return calendar.timeInMillis
+fun spendingCategoryColor(categoryName: String, index: Int): Color {
+    val normalized = categoryName.lowercase(Locale.US)
+    return when {
+        "uncategorized" in normalized || "unassigned" in normalized -> Color(0xFFC9D1D8)
+        "grocer" in normalized -> Color(0xFF43B86B)
+        "restaurant" in normalized || "dining" in normalized -> Color(0xFFFFA044)
+        "subscription" in normalized -> Color(0xFF9B6CF3)
+        "transport" in normalized || "gas" in normalized -> Color(0xFF5D9CEC)
+        "bill" in normalized || "utilit" in normalized -> Color(0xFFFFCE58)
+        "shopping" in normalized -> Color(0xFF4FC3C7)
+        "health" in normalized -> Color(0xFFE85D9A)
+        "travel" in normalized -> Color(0xFF7FB3FF)
+        "home" in normalized -> Color(0xFF5CC7A9)
+        else -> listOf(
+            Color(0xFF43B86B),
+            Color(0xFFFFA044),
+            Color(0xFF9B6CF3),
+            Color(0xFF5D9CEC),
+            Color(0xFFFFCE58),
+            Color(0xFF4FC3C7),
+            Color(0xFFC9D1D8)
+        )[index % 7]
+    }
 }
 
-fun formatMonthYear(monthStartEpochMs: Long): String {
-    val formatter = SimpleDateFormat("MMMM yyyy", Locale.getDefault())
-    return formatter.format(Date(monthStartEpochMs))
+fun merchantAccentColor(
+    merchantName: String,
+    index: Int
+): Color {
+    if (isVirtualUncategorizedCategory(merchantName)) {
+        return Color(0xFFC9D1D8)
+    }
+    val palette = listOf(
+        Color(0xFF21A66B),
+        Color(0xFFFF8A3D),
+        Color(0xFF7C5CFF),
+        Color(0xFF3E8BFF),
+        Color(0xFFE85D9A),
+        Color(0xFF00A7A7),
+        Color(0xFFFFB33F),
+        Color(0xFF6E7BFF),
+        Color(0xFF2DAE73),
+        Color(0xFFE45757),
+        Color(0xFF5A9BD5),
+        Color(0xFF8A63D2)
+    )
+    return palette[index.mod(palette.size)]
 }
 
-fun treatmentLabel(treatment: String): String {
-    return when (treatment) {
-        TransactionTreatments.EXPENSE -> "Expense"
-        TransactionTreatments.INCOME -> "Income"
-        TransactionTreatments.REFUND -> "Refund"
-        TransactionTreatments.CREDIT_CARD_PAYMENT -> "Credit card payment"
-        TransactionTreatments.TRANSFER -> "Transfer"
-        TransactionTreatments.PERSON_TO_PERSON -> "Person to person"
-        else -> "Unknown"
+fun categoryGlyph(categoryName: String): String {
+    val normalized = categoryName.lowercase(Locale.US)
+    return when {
+        "uncategorized" in normalized || "unassigned" in normalized -> "?"
+        "grocer" in normalized -> "G"
+        "restaurant" in normalized || "dining" in normalized -> "R"
+        "subscription" in normalized -> "S"
+        "transport" in normalized || "gas" in normalized -> "T"
+        "bill" in normalized || "utilit" in normalized -> "B"
+        "shopping" in normalized -> "S"
+        "health" in normalized -> "H"
+        "travel" in normalized -> "T"
+        "home" in normalized -> "H"
+        else -> categoryName.trim().take(1).uppercase(Locale.US).ifBlank { "O" }
     }
 }
 
@@ -3721,17 +5828,36 @@ fun CategoryDrilldownScreen(
     onBack: () -> Unit,
     onTransactionSelected: (TransactionEntity) -> Unit
 ) {
-    val amount = summary.amountCents / 100.0
+    val isUncategorizedDrilldown = isVirtualUncategorizedCategory(summary.categoryName)
+    val merchantGroups = remember(transactions) {
+        transactions
+            .groupBy {
+                it.spendingMerchantName?.takeIf { name -> name.isNotBlank() }
+                    ?: it.displayMerchantName
+                    ?: it.merchantRaw
+                    ?: "Unknown merchant"
+            }
+            .map { (merchant, group) ->
+                Triple(
+                    merchant,
+                    group.size,
+                    group.sumOf {
+                        TransactionTreatments.spendingImpactCents(
+                            treatment = it.accountingTreatment,
+                            excludedFromSpending = it.excludedFromSpending,
+                            amountCents = it.amountCents
+                        )
+                    }
+                )
+            }
+            .sortedByDescending { kotlin.math.abs(it.third) }
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Category Detail") },
-                navigationIcon = {
-                    TextButton(onClick = onBack) {
-                        Text("Back")
-                    }
-                }
+                navigationIcon = {}
             )
         }
     ) { padding ->
@@ -3749,16 +5875,18 @@ fun CategoryDrilldownScreen(
                 CategoryDetailSummaryCard(
                     monthLabel = monthLabel,
                     summary = summary,
-                    amountText = "$${"%.2f".format(amount)}"
+                    amountText = formatSignedMoney(summary.amountCents)
                 )
             }
 
             item {
-                Text(
-                    text = "Transactions",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
+                if (!isUncategorizedDrilldown) {
+                    Text(
+                        text = "Merchants",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
             }
 
             if (transactions.isEmpty()) {
@@ -3766,6 +5894,29 @@ fun CategoryDrilldownScreen(
                     EmptySectionText("No transactions found for this category.")
                 }
             } else {
+                if (!isUncategorizedDrilldown) {
+                    items(
+                        items = merchantGroups,
+                        key = { it.first }
+                    ) { (merchantName, transactionCount, amountCents) ->
+                        LedgerListRow(
+                            title = merchantName,
+                            supportingText = "$transactionCount transactions",
+                            trailingText = formatSignedMoney(amountCents),
+                            leadingText = merchantName.take(1)
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                    }
+                }
+
+                item {
+                    Text(
+                        text = if (isUncategorizedDrilldown) "Uncategorized transactions" else "Transactions",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+
                 items(
                     items = transactions,
                     key = { it.id }
@@ -3788,18 +5939,17 @@ fun CategoryDetailSummaryCard(
     summary: CategorySpendSummary,
     amountText: String
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
     ) {
         Column(
             modifier = Modifier.padding(12.dp)
         ) {
             Text(
-                text = if (summary.subcategoryName.isNullOrBlank()) {
-                    summary.categoryName
-                } else {
-                    "${summary.categoryName} / ${summary.subcategoryName}"
-                },
+                text = summary.categoryName,
                 style = MaterialTheme.typography.titleMedium
             )
 
@@ -3833,7 +5983,32 @@ fun CategoryTransactionCard(
         SimpleDateFormat("MMM dd, yyyy h:mm a", Locale.getDefault())
     }
 
+    val spendingImpact = TransactionTreatments.spendingImpactCents(
+        treatment = transaction.accountingTreatment,
+        excludedFromSpending = transaction.excludedFromSpending,
+        amountCents = transaction.amountCents
+    )
     val amount = transaction.amountCents / 100.0
+    val spendingMerchant = transaction.spendingMerchantName?.takeIf { it.isNotBlank() }
+    val payerPayee = transaction.displayMerchantName ?: transaction.merchantRaw
+
+    LedgerListRow(
+        title = spendingMerchant
+            ?: payerPayee
+            ?: transaction.sourceInstitution
+            ?: "Unknown merchant",
+        supportingText = if (!spendingMerchant.isNullOrBlank() && !payerPayee.isNullOrBlank() && spendingMerchant != payerPayee) {
+            "${formatter.format(Date(transaction.occurredAtEpochMs))} - via $payerPayee"
+        } else {
+            formatter.format(Date(transaction.occurredAtEpochMs))
+        },
+        metadataText = displayCategoryName(transaction.categoryName),
+        pillText = if (transaction.reviewStatus == "NEEDS_REVIEW") "Review" else null,
+        trailingText = formatSignedMoney(spendingImpact),
+        leadingText = transaction.displayMerchantName?.take(1) ?: "$",
+        onClick = onClick
+    )
+    return
 
     Card(
         modifier = Modifier
@@ -3863,10 +6038,7 @@ fun CategoryTransactionCard(
                 style = MaterialTheme.typography.labelSmall
             )
 
-            val categoryText = listOfNotNull(
-                transaction.categoryName,
-                transaction.subcategoryName
-            ).joinToString(" / ")
+            val categoryText = transaction.categoryName.orEmpty()
 
             if (categoryText.isNotBlank()) {
                 Text(
@@ -3892,46 +6064,17 @@ fun CategoryTransactionCard(
     }
 }
 
-fun hasMissingMerchant(transaction: TransactionEntity): Boolean {
-    return transaction.accountingTreatment in setOf(
-        TransactionTreatments.EXPENSE,
-        TransactionTreatments.REFUND,
-        TransactionTreatments.PERSON_TO_PERSON,
-        TransactionTreatments.CREDIT_CARD_PAYMENT,
-        TransactionTreatments.INCOME
-    ) &&
-            transaction.displayMerchantName.isNullOrBlank() &&
-            transaction.merchantRaw.isNullOrBlank()
-}
-
-fun hasMissingCategory(transaction: TransactionEntity): Boolean {
-    return TransactionTreatments.countsAsSpending(
-        treatment = transaction.accountingTreatment,
-        excludedFromSpending = transaction.excludedFromSpending
-    ) &&
-            transaction.categoryName.isNullOrBlank()
-}
-
-fun hasLowConfidence(transaction: TransactionEntity): Boolean {
-    return transaction.parseConfidence < 0.70
-}
-
-fun hasAnyReviewIssue(transaction: TransactionEntity): Boolean {
-    return transaction.reviewStatus == "NEEDS_REVIEW" ||
-            hasMissingMerchant(transaction) ||
-            hasMissingCategory(transaction) ||
-            hasLowConfidence(transaction)
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReviewQueueScreen(
     transactions: List<TransactionEntity>,
+    onNavigate: (AppScreen) -> Unit,
+    onQuickActions: () -> Unit,
     onBack: () -> Unit,
     onTransactionSelected: (TransactionEntity) -> Unit
 ) {
     var selectedFilter by remember {
-        mutableStateOf(ReviewQueueFilter.ALL_ISSUES)
+        mutableStateOf<ReviewQueueFilter?>(null)
     }
 
     val allIssueTransactions = remember(transactions) {
@@ -3940,21 +6083,50 @@ fun ReviewQueueScreen(
             .sortedByDescending { it.occurredAtEpochMs }
     }
 
-    val filteredTransactions = remember(allIssueTransactions, selectedFilter) {
+    val needsReviewTransactions = remember(transactions) {
+        transactions
+            .filter { it.reviewStatus == "NEEDS_REVIEW" }
+            .sortedByDescending { it.occurredAtEpochMs }
+    }
+
+    val missingCategoryTransactions = remember(transactions) {
+        transactions
+            .filter { hasMissingCategory(it) }
+            .sortedByDescending { it.occurredAtEpochMs }
+    }
+
+    val possibleTransferTransactions = remember(transactions) {
+        transactions
+            .filter {
+                it.accountingTreatment in setOf(
+                    TransactionTreatments.PERSON_TO_PERSON,
+                    TransactionTreatments.TRANSFER,
+                    TransactionTreatments.REIMBURSEMENT
+                ) && hasAnyReviewIssue(it)
+            }
+            .sortedByDescending { it.occurredAtEpochMs }
+    }
+
+    val filteredTransactions = remember(
+        allIssueTransactions,
+        needsReviewTransactions,
+        missingCategoryTransactions,
+        possibleTransferTransactions,
+        selectedFilter
+    ) {
         when (selectedFilter) {
+            null -> emptyList()
             ReviewQueueFilter.ALL_ISSUES -> allIssueTransactions
 
-            ReviewQueueFilter.NEEDS_REVIEW -> allIssueTransactions.filter {
-                it.reviewStatus == "NEEDS_REVIEW"
-            }
+            ReviewQueueFilter.NEEDS_REVIEW -> needsReviewTransactions
 
             ReviewQueueFilter.MISSING_MERCHANT -> allIssueTransactions.filter {
                 hasMissingMerchant(it)
             }
 
-            ReviewQueueFilter.MISSING_CATEGORY -> allIssueTransactions.filter {
-                hasMissingCategory(it)
-            }
+            ReviewQueueFilter.MISSING_CATEGORY -> missingCategoryTransactions
+
+            ReviewQueueFilter.POSSIBLE_TRANSFERS -> possibleTransferTransactions
 
             ReviewQueueFilter.LOW_CONFIDENCE -> allIssueTransactions.filter {
                 hasLowConfidence(it)
@@ -3966,18 +6138,34 @@ fun ReviewQueueScreen(
     val missingMerchantCount = transactions.count { hasMissingMerchant(it) }
     val missingCategoryCount = transactions.count { hasMissingCategory(it) }
     val lowConfidenceCount = transactions.count { hasLowConfidence(it) }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Review Queue") },
-                navigationIcon = {
-                    TextButton(onClick = onBack) {
-                        Text("Back")
-                    }
-                }
+    val merchantCategoryCount = remember(transactions) {
+        merchantSummaries(transactions).count { it.uncategorizedCount > 0 }
+    }
+    val missingCategoryAmountCents = remember(missingCategoryTransactions) {
+        missingCategoryTransactions.sumOf {
+            TransactionTreatments.spendingImpactCents(
+                treatment = it.accountingTreatment,
+                excludedFromSpending = it.excludedFromSpending,
+                amountCents = it.amountCents
             )
         }
+    }
+    val selectedListTitle = when (selectedFilter) {
+        ReviewQueueFilter.ALL_ISSUES -> "All review items"
+        ReviewQueueFilter.NEEDS_REVIEW -> "Transactions need review"
+        ReviewQueueFilter.MISSING_MERCHANT -> "Missing merchant"
+        ReviewQueueFilter.MISSING_CATEGORY -> "Uncategorized spending"
+        ReviewQueueFilter.POSSIBLE_TRANSFERS -> "Possible transfers"
+        ReviewQueueFilter.LOW_CONFIDENCE -> "Needs confirmation"
+        null -> null
+    }
+
+    LedgerAppScaffold(
+        title = "Review",
+        activeScreen = AppScreen.REVIEW_QUEUE,
+        onNavigate = onNavigate,
+        onQuickActions = onQuickActions,
+        onBack = onBack
     ) { padding ->
         LazyColumn(
             modifier = Modifier
@@ -3990,43 +6178,312 @@ fun ReviewQueueScreen(
             item {
                 Spacer(modifier = Modifier.height(8.dp))
 
-                ReviewQueueSummaryCard(
-                    totalIssueCount = allIssueTransactions.size,
-                    visibleCount = filteredTransactions.size,
-                    needsReviewCount = needsReviewCount,
-                    missingMerchantCount = missingMerchantCount,
-                    missingCategoryCount = missingCategoryCount,
-                    lowConfidenceCount = lowConfidenceCount
-                )
+                ReviewIntroPanel()
             }
 
-            item {
-                ReviewQueueFilterCard(
-                    selectedFilter = selectedFilter,
-                    allIssuesCount = allIssueTransactions.size,
-                    needsReviewCount = needsReviewCount,
-                    missingMerchantCount = missingMerchantCount,
-                    missingCategoryCount = missingCategoryCount,
-                    lowConfidenceCount = lowConfidenceCount,
-                    onFilterSelected = { selectedFilter = it }
-                )
-            }
-
-            if (filteredTransactions.isEmpty()) {
+            if (merchantCategoryCount > 0) {
                 item {
-                    EmptySectionText("No transactions found for this review filter.")
-                }
-            } else {
-                items(
-                    items = filteredTransactions,
-                    key = { it.id }
-                ) { transaction ->
-                    ReviewTransactionCard(
-                        transaction = transaction,
-                        onClick = { onTransactionSelected(transaction) }
+                    ReviewTaskCard(
+                        icon = "M",
+                        title = "Merchants need categories",
+                        description = "Set a category once and future transactions can follow it.",
+                        metric = "$merchantCategoryCount merchants",
+                        actionText = "Review merchants",
+                        accentColor = Color(0xFFFFA726),
+                        onClick = { onNavigate(AppScreen.MERCHANTS) }
                     )
                 }
             }
+
+            if (needsReviewCount > 0) {
+                item {
+                    ReviewTaskCard(
+                        icon = "R",
+                        title = "Transactions need review",
+                        description = "Confirm transactions that need a decision or one-off edit.",
+                        metric = "$needsReviewCount transactions",
+                        actionText = "Review transactions",
+                        accentColor = Color(0xFF8E63E7),
+                        selected = selectedFilter == ReviewQueueFilter.NEEDS_REVIEW,
+                        onClick = { selectedFilter = ReviewQueueFilter.NEEDS_REVIEW }
+                    )
+                }
+            }
+
+            if (missingCategoryCount > 0) {
+                item {
+                    ReviewTaskCard(
+                        icon = "C",
+                        title = "Uncategorized spending",
+                        description = "Spending transactions without a category.",
+                        metric = formatSignedMoney(missingCategoryAmountCents),
+                        actionText = "$missingCategoryCount transactions",
+                        accentColor = Color(0xFF64A9F5),
+                        selected = selectedFilter == ReviewQueueFilter.MISSING_CATEGORY,
+                        onClick = { selectedFilter = ReviewQueueFilter.MISSING_CATEGORY }
+                    )
+                }
+            }
+
+            if (possibleTransferTransactions.isNotEmpty()) {
+                item {
+                    ReviewTaskCard(
+                        icon = "T",
+                        title = "Possible transfers",
+                        description = "Check person-to-person items, reimbursements, and transfers.",
+                        metric = "${possibleTransferTransactions.size} transactions",
+                        actionText = "Review items",
+                        accentColor = Color(0xFF33A564),
+                        selected = selectedFilter == ReviewQueueFilter.POSSIBLE_TRANSFERS,
+                        onClick = { selectedFilter = ReviewQueueFilter.POSSIBLE_TRANSFERS }
+                    )
+                }
+            }
+
+            if (allIssueTransactions.isEmpty() && merchantCategoryCount == 0) {
+                item {
+                    InlineInfoPanel(
+                        title = "All caught up",
+                        body = "There are no review tasks waiting right now."
+                    )
+                }
+            }
+
+            if (allIssueTransactions.isNotEmpty()) {
+                item {
+                    ReviewSecondaryFilters(
+                        allIssuesCount = allIssueTransactions.size,
+                        missingMerchantCount = missingMerchantCount,
+                        needsConfirmationCount = lowConfidenceCount,
+                        onAllSelected = { selectedFilter = ReviewQueueFilter.ALL_ISSUES },
+                        onMissingMerchantSelected = { selectedFilter = ReviewQueueFilter.MISSING_MERCHANT },
+                        onNeedsConfirmationSelected = { selectedFilter = ReviewQueueFilter.LOW_CONFIDENCE }
+                    )
+                }
+            }
+
+            if (selectedFilter != null) {
+                item {
+                    ReviewSelectedListHeader(
+                        title = selectedListTitle.orEmpty(),
+                        count = filteredTransactions.size,
+                        onClear = { selectedFilter = null }
+                    )
+                }
+
+                if (filteredTransactions.isEmpty()) {
+                    item {
+                        EmptySectionText("No transactions found for this review task.")
+                    }
+                } else {
+                    items(
+                        items = filteredTransactions,
+                        key = { it.id }
+                    ) { transaction ->
+                        ReviewTransactionCard(
+                            transaction = transaction,
+                            onClick = { onTransactionSelected(transaction) }
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ReviewIntroPanel() {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            text = "Items that need your attention",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+        )
+        Text(
+            text = "Keep your spending accurate without reviewing everything one by one.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+fun ReviewTaskCard(
+    icon: String,
+    title: String,
+    description: String,
+    metric: String,
+    actionText: String,
+    accentColor: Color,
+    selected: Boolean = false,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        color = if (selected) accentColor.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp,
+        border = androidx.compose.foundation.BorderStroke(
+            width = 1.dp,
+            color = if (selected) accentColor.copy(alpha = 0.45f) else MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                Surface(
+                    color = accentColor.copy(alpha = 0.16f),
+                    contentColor = accentColor,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = icon,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp)
+                    )
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                    )
+                    Text(
+                        text = description,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
+                    Text(
+                        text = metric,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                        color = accentColor
+                    )
+                    Text(
+                        text = ">",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Surface(
+                color = accentColor.copy(alpha = 0.10f),
+                contentColor = accentColor,
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
+            ) {
+                Text(
+                    text = actionText,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 7.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ReviewSecondaryFilters(
+    allIssuesCount: Int,
+    missingMerchantCount: Int,
+    needsConfirmationCount: Int,
+    onAllSelected: () -> Unit,
+    onMissingMerchantSelected: () -> Unit,
+    onNeedsConfirmationSelected: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "More review filters",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onAllSelected,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("All $allIssuesCount")
+                }
+                OutlinedButton(
+                    onClick = onMissingMerchantSelected,
+                    modifier = Modifier.weight(1f),
+                    enabled = missingMerchantCount > 0
+                ) {
+                    Text("Merchant $missingMerchantCount")
+                }
+            }
+
+            OutlinedButton(
+                onClick = onNeedsConfirmationSelected,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = needsConfirmationCount > 0
+            ) {
+                Text("Needs confirmation $needsConfirmationCount")
+            }
+        }
+    }
+}
+
+@Composable
+fun ReviewSelectedListHeader(
+    title: String,
+    count: Int,
+    onClear: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+    ) {
+        Column {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+            )
+            Text(
+                text = "$count items",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        TextButton(onClick = onClear) {
+            Text("Hide")
         }
     }
 }
@@ -4040,26 +6497,20 @@ fun ReviewQueueSummaryCard(
     missingCategoryCount: Int,
     lowConfidenceCount: Int
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp)
-        ) {
-            Text(
-                text = "Review Summary",
-                style = MaterialTheme.typography.titleMedium
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        StatStrip(
+            items = listOf(
+                StatStripItem("Needs review", needsReviewCount.toString(), emphasized = true),
+                StatStripItem("Missing merchant", missingMerchantCount.toString()),
+                StatStripItem("Missing category", missingCategoryCount.toString()),
+                StatStripItem("Low confidence", lowConfidenceCount.toString())
             )
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Text("Total issue transactions: $totalIssueCount")
-            Text("Currently showing: $visibleCount")
-            Text("Needs review: $needsReviewCount")
-            Text("Missing merchant: $missingMerchantCount")
-            Text("Missing category: $missingCategoryCount")
-            Text("Low confidence: $lowConfidenceCount")
-        }
+        )
+        Text(
+            text = "Showing $visibleCount of $totalIssueCount items needing attention",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
@@ -4073,8 +6524,13 @@ fun ReviewQueueFilterCard(
     lowConfidenceCount: Int,
     onFilterSelected: (ReviewQueueFilter) -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 10.dp),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
     ) {
         Column(
             modifier = Modifier.padding(12.dp)
@@ -4177,8 +6633,29 @@ fun ReviewTransactionCard(
         if (transaction.reviewStatus == "NEEDS_REVIEW") add("Needs review")
         if (hasMissingMerchant(transaction)) add("Missing merchant")
         if (hasMissingCategory(transaction)) add("Missing category")
-        if (hasLowConfidence(transaction)) add("Low confidence")
+        if (hasLowConfidence(transaction)) add("Needs confirmation")
     }
+
+    val categoryText = transaction.categoryName.orEmpty()
+
+    LedgerListRow(
+        title = transaction.displayMerchantName
+            ?: transaction.merchantRaw
+            ?: transaction.sourceInstitution
+            ?: "Unknown merchant",
+        supportingText = formatter.format(Date(transaction.occurredAtEpochMs)),
+        metadataText = if (categoryText.isNotBlank()) {
+            "${issues.joinToString(", ")} - $categoryText"
+        } else {
+            issues.joinToString(", ")
+        },
+        pillText = treatmentLabel(transaction.accountingTreatment),
+        trailingText = "$${"%.2f".format(amount)}",
+        trailingSupportingText = "Fix",
+        leadingText = "!",
+        onClick = onClick
+    )
+    return
 
     Card(
         modifier = Modifier
@@ -4217,10 +6694,7 @@ fun ReviewTransactionCard(
                 )
             }
 
-            val categoryText = listOfNotNull(
-                transaction.categoryName,
-                transaction.subcategoryName
-            ).joinToString(" / ")
+            val categoryText = transaction.categoryName.orEmpty()
 
             if (categoryText.isNotBlank()) {
                 Text(
@@ -4239,488 +6713,6 @@ fun ReviewTransactionCard(
     }
 }
 
-fun normalizeRulePhrase(phrase: String): String {
-    return phrase.trim().lowercase(Locale.US)
-}
-
-suspend fun parseIdentifiedSourceTransactions(database: AppDatabase): ParseRunResult {
-    val rawAlertsOnce = database.rawAlertDao().getAllOnce()
-    val identifiedSources = database
-        .financialSourceDao()
-        .getIdentifiedSourcesOnce()
-    val merchantDefaultRules = database
-        .transactionRuleDao()
-        .getActiveRulesForSource(MERCHANT_DEFAULT_RULE_SOURCE_KEY)
-
-    var parsedCount = 0
-    var skippedCount = 0
-    var ignoredNonTransactionCount = 0
-    var failedCount = 0
-    var matchedAlertCount = 0
-
-    identifiedSources.forEach { source ->
-        val sourceRules = database
-            .transactionRuleDao()
-            .getActiveRulesForSource(source.sourceKey)
-
-        val matchingAlerts = rawAlertsOnce.filter { rawAlert ->
-            SourceDetector.matchesSource(rawAlert, source)
-        }
-
-        matchedAlertCount += matchingAlerts.size
-
-        matchingAlerts.forEach { rawAlert ->
-            if (database.transactionDao().countByRawAlertId(rawAlert.id) > 0) {
-                skippedCount++
-                return@forEach
-            }
-
-            val parsedTransaction = SmsTransactionParser.parse(
-                rawAlert = rawAlert,
-                source = source,
-                sourceMessages = matchingAlerts.map { it.combinedText }
-            )
-
-            if (parsedTransaction == null) {
-                val status = if (SmsTransactionParser.isNonTransactionAlert(rawAlert)) {
-                    "IGNORED_NON_TRANSACTION"
-                } else {
-                    "FAILED_TRANSACTION_PARSE"
-                }
-
-                database.rawAlertDao().updateProcessingStatus(
-                    rawAlert.id,
-                    status
-                )
-
-                if (status == "FAILED_TRANSACTION_PARSE") {
-                    failedCount++
-                } else {
-                    ignoredNonTransactionCount++
-                }
-            } else {
-                val ruleAdjustedTransaction = applyRulesToTransaction(
-                    transaction = parsedTransaction,
-                    rawAlert = rawAlert,
-                    sourceRules = sourceRules,
-                    merchantDefaultRules = merchantDefaultRules
-                )
-
-                database.transactionDao().insert(ruleAdjustedTransaction)
-
-                database.rawAlertDao().updateProcessingStatus(
-                    rawAlert.id,
-                    "PARSED_TRANSACTION"
-                )
-
-                parsedCount++
-            }
-        }
-    }
-
-    return ParseRunResult(
-        matchedAlertCount = matchedAlertCount,
-        parsedCount = parsedCount,
-        skippedCount = skippedCount,
-        ignoredNonTransactionCount = ignoredNonTransactionCount,
-        failedCount = failedCount
-    )
-}
-
-suspend fun detectAndSaveSources(
-    database: AppDatabase,
-    rawAlerts: List<RawAlertEntity>
-): Int {
-    database.financialSourceDao().deleteLegacyNonSenderSources()
-
-    val detectedSources = SourceDetector.detect(rawAlerts)
-
-    detectedSources.forEach { detected ->
-        val existing = database
-            .financialSourceDao()
-            .getBySourceKey(detected.sourceKey)
-
-        val sourceToSave = if (existing == null) {
-            detected
-        } else {
-            detected.copy(
-                confirmedAccountType = existing.confirmedAccountType,
-                displayName = existing.displayName ?: detected.displayName,
-                userConfirmed = existing.userConfirmed,
-                ignored = existing.ignored,
-                createdAtEpochMs = existing.createdAtEpochMs,
-                updatedAtEpochMs = System.currentTimeMillis()
-            )
-        }
-
-        database.financialSourceDao().upsert(sourceToSave)
-    }
-
-    return detectedSources.size
-}
-
-suspend fun reapplySavedRulesToExistingTransactions(database: AppDatabase): Int {
-    val rawAlertsById = database.rawAlertDao()
-        .getAllOnce()
-        .associateBy { it.id }
-
-    val merchantDefaultRules = database
-        .transactionRuleDao()
-        .getActiveRulesForSource(MERCHANT_DEFAULT_RULE_SOURCE_KEY)
-
-    val sourceRuleCache = mutableMapOf<String, List<TransactionRuleEntity>>()
-    var updatedCount = 0
-
-    database.transactionDao().getAllOnce().forEach { transaction ->
-        val rawAlert = rawAlertsById[transaction.rawAlertId] ?: return@forEach
-        val sourceRules = sourceRuleCache.getOrPut(transaction.sourceKey) {
-            database.transactionRuleDao().getActiveRulesForSource(transaction.sourceKey)
-        }
-
-        val updatedTransaction = applyRulesToTransaction(
-            transaction = transaction,
-            rawAlert = rawAlert,
-            sourceRules = sourceRules,
-            merchantDefaultRules = merchantDefaultRules
-        )
-
-        if (updatedTransaction != transaction) {
-            database.transactionDao().update(updatedTransaction)
-            updatedCount++
-        }
-    }
-
-    return updatedCount
-}
-
-suspend fun updateRawAlertStatusesForSource(
-    database: AppDatabase,
-    source: FinancialSourceEntity,
-    status: String
-) {
-    database.rawAlertDao()
-        .getAllOnce()
-        .filter { rawAlert -> SourceDetector.matchesSource(rawAlert, source) }
-        .forEach { rawAlert ->
-            database.rawAlertDao().updateProcessingStatus(
-                rawAlertId = rawAlert.id,
-                status = status
-            )
-        }
-}
-
-fun buildTransactionsCsv(transactions: List<TransactionEntity>): String {
-    val header = listOf(
-        "id",
-        "occurredAt",
-        "amount",
-        "currency",
-        "type",
-        "accountingTreatment",
-        "merchant",
-        "category",
-        "subcategory",
-        "source",
-        "accountHint",
-        "reviewStatus",
-        "excludedFromSpending",
-        "parseConfidence",
-        "notes"
-    )
-
-    val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
-    val rows = transactions.map { transaction ->
-        listOf(
-            transaction.id.toString(),
-            formatter.format(Date(transaction.occurredAtEpochMs)),
-            "%.2f".format(Locale.US, transaction.amountCents / 100.0),
-            transaction.currency,
-            transaction.transactionType,
-            transaction.accountingTreatment,
-            transaction.displayMerchantName ?: transaction.merchantRaw ?: "",
-            transaction.categoryName ?: "",
-            transaction.subcategoryName ?: "",
-            transaction.sourceInstitution ?: transaction.sourceKey,
-            transaction.accountHint ?: "",
-            transaction.reviewStatus,
-            transaction.excludedFromSpending.toString(),
-            "%.2f".format(Locale.US, transaction.parseConfidence),
-            transaction.parserNotes ?: ""
-        )
-    }
-
-    return (listOf(header) + rows)
-        .joinToString(separator = "\n") { row ->
-            row.joinToString(separator = ",") { csvEscape(it) }
-        } + "\n"
-}
-
-fun buildParserCorpusJsonl(
-    rawAlerts: List<RawAlertEntity>,
-    transactionsByRawAlertId: Map<Long, TransactionEntity>
-): String {
-    return rawAlerts
-        .sortedBy { it.postTimeEpochMs }
-        .joinToString(separator = "\n", postfix = "\n") { alert ->
-            val transaction = transactionsByRawAlertId[alert.id]
-            buildString {
-                append("{")
-                appendJsonField("rawAlertId", alert.id)
-                append(",")
-                appendJsonField("notificationKey", alert.notificationKey)
-                append(",")
-                appendJsonField("sourcePackage", alert.sourcePackage)
-                append(",")
-                appendJsonField("sender", alert.title.orEmpty().removePrefix("SMS from ").trim())
-                append(",")
-                appendJsonField("timestampEpochMs", alert.postTimeEpochMs)
-                append(",")
-                appendJsonField("processingStatus", alert.processingStatus)
-                append(",")
-                appendJsonField("rawSmsText", alert.combinedText)
-                append(",")
-                append("\"parsed\":")
-                if (transaction == null) {
-                    append("null")
-                } else {
-                    append("{")
-                    appendJsonField("transactionId", transaction.id)
-                    append(",")
-                    appendJsonField("sourceKey", transaction.sourceKey)
-                    append(",")
-                    appendJsonField("amountCents", transaction.amountCents)
-                    append(",")
-                    appendJsonField("currency", transaction.currency)
-                    append(",")
-                    appendJsonField("transactionType", transaction.transactionType)
-                    append(",")
-                    appendJsonField("accountingTreatment", transaction.accountingTreatment)
-                    append(",")
-                    appendJsonField("merchantRaw", transaction.merchantRaw)
-                    append(",")
-                    appendJsonField("displayMerchantName", transaction.displayMerchantName)
-                    append(",")
-                    appendJsonField("categoryName", transaction.categoryName)
-                    append(",")
-                    appendJsonField("subcategoryName", transaction.subcategoryName)
-                    append(",")
-                    appendJsonField("reviewStatus", transaction.reviewStatus)
-                    append(",")
-                    appendJsonField("parseConfidence", transaction.parseConfidence)
-                    append(",")
-                    appendJsonField("parserNotes", transaction.parserNotes)
-                    append(",")
-                    appendJsonField("merchantUserEdited", transaction.merchantUserEdited)
-                    append(",")
-                    appendJsonField("categoryUserEdited", transaction.categoryUserEdited)
-                    append(",")
-                    appendJsonField("treatmentUserEdited", transaction.treatmentUserEdited)
-                    append("}")
-                }
-                append("}")
-            }
-        }
-}
-
-private fun StringBuilder.appendJsonField(name: String, value: String?) {
-    append("\"")
-    append(jsonEscape(name))
-    append("\":")
-    if (value == null) {
-        append("null")
-    } else {
-        append("\"")
-        append(jsonEscape(value))
-        append("\"")
-    }
-}
-
-private fun StringBuilder.appendJsonField(name: String, value: Long) {
-    append("\"")
-    append(jsonEscape(name))
-    append("\":")
-    append(value)
-}
-
-private fun StringBuilder.appendJsonField(name: String, value: Double) {
-    append("\"")
-    append(jsonEscape(name))
-    append("\":")
-    append("%.4f".format(Locale.US, value))
-}
-
-private fun StringBuilder.appendJsonField(name: String, value: Boolean) {
-    append("\"")
-    append(jsonEscape(name))
-    append("\":")
-    append(value)
-}
-
-private fun jsonEscape(value: String): String {
-    return buildString {
-        value.forEach { char ->
-            when (char) {
-                '\\' -> append("\\\\")
-                '"' -> append("\\\"")
-                '\b' -> append("\\b")
-                '\u000C' -> append("\\f")
-                '\n' -> append("\\n")
-                '\r' -> append("\\r")
-                '\t' -> append("\\t")
-                else -> {
-                    if (char.code < 0x20) {
-                        append("\\u")
-                        append(char.code.toString(16).padStart(4, '0'))
-                    } else {
-                        append(char)
-                    }
-                }
-            }
-        }
-    }
-}
-
-private fun csvEscape(value: String): String {
-    val escaped = value.replace("\"", "\"\"")
-    return if (escaped.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) {
-        "\"$escaped\""
-    } else {
-        escaped
-    }
-}
-
-fun applyRulesToTransaction(
-    transaction: TransactionEntity,
-    rawAlert: RawAlertEntity,
-    sourceRules: List<TransactionRuleEntity>,
-    merchantDefaultRules: List<TransactionRuleEntity> = emptyList()
-): TransactionEntity {
-    var updated = transaction
-    val appliedRulePhrases = mutableListOf<String>()
-
-    sourceRules.forEach { rule ->
-        if (!rule.active) return@forEach
-        if (!rule.matchesTreatment(updated.accountingTreatment)) return@forEach
-
-        val phrase = rule.matchPhrase.trim()
-        if (phrase.isBlank()) return@forEach
-
-        val matches = rawAlert.combinedText.contains(
-            other = phrase,
-            ignoreCase = true
-        )
-
-        if (!matches) return@forEach
-
-        val ruleTreatment = rule.transactionType ?: updated.accountingTreatment
-        val shouldApplyCategory = rule.shouldApplyCategoryTo(updated.accountingTreatment)
-
-        updated = updated.copy(
-            merchantRaw = if (!updated.merchantUserEdited) rule.merchantName ?: updated.merchantRaw else updated.merchantRaw,
-            displayMerchantName = if (!updated.merchantUserEdited) rule.merchantName ?: updated.displayMerchantName else updated.displayMerchantName,
-            categoryName = if (!updated.categoryUserEdited && shouldApplyCategory) rule.categoryName ?: updated.categoryName else updated.categoryName,
-            subcategoryName = if (!updated.categoryUserEdited && shouldApplyCategory) rule.subcategoryName ?: updated.subcategoryName else updated.subcategoryName,
-            transactionType = if (!updated.treatmentUserEdited) ruleTreatment else updated.transactionType,
-            accountingTreatment = if (!updated.treatmentUserEdited) ruleTreatment else updated.accountingTreatment,
-            reviewStatus = when {
-                rule.requiresReview -> "NEEDS_REVIEW"
-                rule.reviewStatus != null -> rule.reviewStatus
-                else -> updated.reviewStatus
-            },
-            excludedFromSpending = if (!updated.treatmentUserEdited) {
-                rule.excludedFromSpending ?: TransactionTreatments.defaultExcludedFromSpending(ruleTreatment)
-            } else {
-                updated.excludedFromSpending
-            },
-            updatedAtEpochMs = System.currentTimeMillis()
-        )
-
-        appliedRulePhrases.add(rule.matchPhrase)
-    }
-
-    val merchantName = (updated.displayMerchantName ?: updated.merchantRaw)
-        ?.trim()
-
-    if (
-        !merchantName.isNullOrBlank()
-    ) {
-        val normalizedMerchant = normalizeRulePhrase(merchantName)
-        val merchantRule = merchantDefaultRules.firstOrNull { rule ->
-            rule.active &&
-                    rule.matchesTreatment(updated.accountingTreatment) &&
-                    (
-                            rule.normalizedMatchPhrase == normalizedMerchant ||
-                                    normalizeRulePhrase(rule.merchantName ?: rule.matchPhrase) == normalizedMerchant
-                            )
-        }
-
-        if (merchantRule != null) {
-            val merchantTreatment = merchantRule.transactionType ?: updated.accountingTreatment
-            val shouldApplyCategory = merchantRule.shouldApplyCategoryTo(updated.accountingTreatment)
-            val categoryName = if (!updated.categoryUserEdited && shouldApplyCategory) {
-                merchantRule.categoryName ?: updated.categoryName
-            } else {
-                updated.categoryName
-            }
-            val subcategoryName = if (!updated.categoryUserEdited && shouldApplyCategory) {
-                merchantRule.subcategoryName ?: updated.subcategoryName
-            } else {
-                updated.subcategoryName
-            }
-
-            updated = updated.copy(
-                merchantRaw = if (!updated.merchantUserEdited) merchantRule.merchantName ?: updated.merchantRaw else updated.merchantRaw,
-                displayMerchantName = if (!updated.merchantUserEdited) merchantRule.merchantName ?: updated.displayMerchantName else updated.displayMerchantName,
-                categoryName = categoryName,
-                subcategoryName = subcategoryName,
-                transactionType = if (!updated.treatmentUserEdited) merchantTreatment else updated.transactionType,
-                accountingTreatment = if (!updated.treatmentUserEdited) merchantTreatment else updated.accountingTreatment,
-                excludedFromSpending = if (!updated.treatmentUserEdited) {
-                    merchantRule.excludedFromSpending
-                        ?: TransactionTreatments.defaultExcludedFromSpending(merchantTreatment)
-                } else {
-                    updated.excludedFromSpending
-                },
-                reviewStatus = when {
-                    merchantRule.requiresReview -> "NEEDS_REVIEW"
-                    !categoryName.isNullOrBlank() && updated.reviewStatus == "NEEDS_REVIEW" -> "AUTO_PARSED"
-                    else -> updated.reviewStatus
-                },
-                updatedAtEpochMs = System.currentTimeMillis()
-            )
-
-            appliedRulePhrases.add("merchant default: ${merchantRule.matchPhrase}")
-        }
-    }
-
-    if (appliedRulePhrases.isEmpty()) {
-        return updated
-    }
-
-    val existingNotes = updated.parserNotes.orEmpty()
-    val ruleNote = "Applied saved rule(s): ${appliedRulePhrases.joinToString(", ")}."
-
-    return updated.copy(
-        parserNotes = listOf(existingNotes, ruleNote)
-            .filter { it.isNotBlank() }
-            .joinToString(" ")
-    )
-}
-
-private fun TransactionRuleEntity.matchesTreatment(treatment: String): Boolean {
-    return appliesToTreatment.isNullOrBlank() ||
-            appliesToTreatment == treatment ||
-            transactionType != null
-}
-
-private fun TransactionRuleEntity.shouldApplyCategoryTo(treatment: String): Boolean {
-    if (!applyCategoryAutomatically || requiresReview) return false
-    if (categoryName.isNullOrBlank()) return false
-    return !appliesToTreatment.isNullOrBlank() ||
-            treatment == TransactionTreatments.EXPENSE ||
-            transactionType == treatment
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
@@ -4734,9 +6726,12 @@ fun HomeScreen(
     currentMonthSpendingCents: Long,
     currentMonthIncomeCents: Long,
     currentMonthRefundCents: Long,
+    currentMonthReimbursementCents: Long,
     currentMonthMovementCents: Long,
     previousMonthSpendingCents: Long,
+    currentMonthGrossExpenseCents: Long,
     currentMonthExpenseCount: Int,
+    currentMonthCategorySummaries: List<CategorySpendSummary>,
     topCategoryLabel: String,
     topMerchantLabel: String,
     onOpenSetup: () -> Unit,
@@ -4746,23 +6741,22 @@ fun HomeScreen(
     onOpenSummary: () -> Unit,
     onOpenMerchants: () -> Unit,
     onOpenRules: () -> Unit,
-    onOpenTools: () -> Unit
+    onOpenTools: () -> Unit,
+    onOpenQuickActions: () -> Unit
 ){
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("LedgerLens") }
-            )
+    LedgerAppScaffold(
+        title = "Home",
+        activeScreen = AppScreen.HOME,
+        onNavigate = { screen ->
+            when (screen) {
+                AppScreen.SUMMARY -> onOpenSummary()
+                AppScreen.REVIEW_QUEUE -> onOpenReviewQueue()
+                AppScreen.TRANSACTIONS -> onOpenTransactions()
+                AppScreen.TOOLS -> onOpenTools()
+                else -> onOpenTools()
+            }
         },
-        bottomBar = {
-            HomeBottomNav(
-                onOpenHome = {},
-                onOpenSummary = onOpenSummary,
-                onOpenReviewQueue = onOpenReviewQueue,
-                onOpenMerchants = onOpenMerchants,
-                onOpenTransactions = onOpenTransactions
-            )
-        }
+        onQuickActions = onOpenQuickActions
     ) { padding ->
         LazyColumn(
             modifier = Modifier
@@ -4786,9 +6780,12 @@ fun HomeScreen(
                     currentMonthSpendingCents = currentMonthSpendingCents,
                     currentMonthIncomeCents = currentMonthIncomeCents,
                     currentMonthRefundCents = currentMonthRefundCents,
+                    currentMonthReimbursementCents = currentMonthReimbursementCents,
                     currentMonthMovementCents = currentMonthMovementCents,
                     previousMonthSpendingCents = previousMonthSpendingCents,
+                    currentMonthGrossExpenseCents = currentMonthGrossExpenseCents,
                     currentMonthExpenseCount = currentMonthExpenseCount,
+                    currentMonthCategorySummaries = currentMonthCategorySummaries,
                     topCategoryLabel = topCategoryLabel,
                     topMerchantLabel = topMerchantLabel
                 )
@@ -4808,48 +6805,38 @@ fun HomeScreen(
             }
 
             item {
-                HomeNavCard(
-                    title = "Spending",
-                    description = "Monthly totals, categories, and transaction drilldowns.",
-                    buttonText = "View Spending",
-                    onClick = onOpenSummary
+                ListSectionHeader(
+                    title = "Daily workflow",
+                    actionText = "Tools",
+                    onActionClick = onOpenTools
                 )
             }
 
             item {
-                HomeNavCard(
-                    title = "Needs Review",
-                    description = "Only the transactions that need a decision.",
-                    buttonText = "Review Items",
-                    onClick = onOpenReviewQueue
-                )
-            }
-
-            item {
-                HomeNavCard(
-                    title = "Merchants",
-                    description = "Set default categories once and let future transactions follow them.",
-                    buttonText = "Review Merchants",
-                    onClick = onOpenMerchants
-                )
-            }
-
-            item {
-                HomeNavCard(
-                    title = "All Transactions",
-                    description = "Search and inspect the full transaction history.",
-                    buttonText = "Browse",
-                    onClick = onOpenTransactions
-                )
-            }
-
-            item {
-                HomeNavCard(
-                    title = "Settings",
-                    description = "Manage sources, rules, imports, exports, and maintenance.",
-                    buttonText = "Open Settings",
-                    onClick = onOpenTools
-                )
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                    tonalElevation = 0.dp
+                ) {
+                    Column {
+                        LedgerListRow(
+                            title = "Spending",
+                            supportingText = "Monthly totals, categories, and drilldowns",
+                            trailingText = "Open",
+                            leadingText = "S",
+                            onClick = onOpenSummary
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                        LedgerListRow(
+                            title = "Sources and rules",
+                            supportingText = "$identifiedSourceCount active sources - $activeRuleCount saved rules",
+                            trailingText = "Manage",
+                            leadingText = "R",
+                            onClick = onOpenTools
+                        )
+                    }
+                }
             }
         }
     }
@@ -4863,38 +6850,18 @@ fun HomeBottomNav(
     onOpenMerchants: () -> Unit,
     onOpenTransactions: () -> Unit
 ) {
-    NavigationBar {
-        NavigationBarItem(
-            selected = true,
-            onClick = onOpenHome,
-            icon = { Text("H") },
-            label = { Text("Home") }
-        )
-        NavigationBarItem(
-            selected = false,
-            onClick = onOpenSummary,
-            icon = { Text("S") },
-            label = { Text("Spend") }
-        )
-        NavigationBarItem(
-            selected = false,
-            onClick = onOpenReviewQueue,
-            icon = { Text("!") },
-            label = { Text("Review") }
-        )
-        NavigationBarItem(
-            selected = false,
-            onClick = onOpenMerchants,
-            icon = { Text("M") },
-            label = { Text("Merchants") }
-        )
-        NavigationBarItem(
-            selected = false,
-            onClick = onOpenTransactions,
-            icon = { Text("T") },
-            label = { Text("Activity") }
-        )
-    }
+    LedgerBottomNav(
+        selectedDestination = com.example.ledgerlens.ui.LedgerNavDestination.SPENDING,
+        onDestinationSelected = { destination ->
+            when (destination.screen) {
+                AppScreen.SUMMARY -> onOpenSummary()
+                AppScreen.REVIEW_QUEUE -> onOpenReviewQueue()
+                AppScreen.TRANSACTIONS -> onOpenTransactions()
+                AppScreen.TOOLS -> onOpenHome()
+                else -> onOpenSummary()
+            }
+        }
+    )
 }
 
 @Composable
@@ -4909,52 +6876,274 @@ fun HomeStatusCard(
     currentMonthSpendingCents: Long,
     currentMonthIncomeCents: Long,
     currentMonthRefundCents: Long,
+    currentMonthReimbursementCents: Long,
     currentMonthMovementCents: Long,
     previousMonthSpendingCents: Long,
+    currentMonthGrossExpenseCents: Long,
     currentMonthExpenseCount: Int,
+    currentMonthCategorySummaries: List<CategorySpendSummary>,
     topCategoryLabel: String,
     topMerchantLabel: String
 ) {
     val currentMonthSpending = currentMonthSpendingCents / 100.0
+    val currentMonthGrossExpenses = currentMonthGrossExpenseCents / 100.0
     val currentMonthIncome = currentMonthIncomeCents / 100.0
     val currentMonthRefunds = currentMonthRefundCents / 100.0
+    val currentMonthReimbursements = currentMonthReimbursementCents / 100.0
     val currentMonthMovements = currentMonthMovementCents / 100.0
     val previousMonthSpending = previousMonthSpendingCents / 100.0
     val delta = currentMonthSpending - previousMonthSpending
 
-    Card(
-        modifier = Modifier.fillMaxWidth()
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Column(
-            modifier = Modifier.padding(12.dp)
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surface,
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+            tonalElevation = 0.dp
         ) {
-            Text(
-                text = "$${"%.2f".format(currentMonthSpending)}",
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.primary
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text(
+                            text = "${formatMonthYear(getCurrentMonthStartEpochMs())} overview",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = formatSignedMoney(currentMonthSpendingCents),
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "$currentMonthExpenseCount spending-impact transactions",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
+                        Text(
+                            text = "Month change",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = formatSignedMoney(currentMonthSpendingCents - previousMonthSpendingCents),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = if (delta <= 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
+                        )
+                    }
+                }
+                MiniTrendStrip(
+                    values = listOf(
+                        previousMonthSpending.toFloat(),
+                        (previousMonthSpending * 0.72).toFloat(),
+                        (currentMonthSpending * 0.84).toFloat(),
+                        (currentMonthSpending * 1.08).toFloat(),
+                        currentMonthSpending.toFloat()
+                    )
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            MetricPanel(
+                label = "Gross expenses",
+                value = "$${"%.2f".format(currentMonthGrossExpenses)}",
+                supportingText = "Before offsets",
+                modifier = Modifier.weight(1f)
+            )
+            MetricPanel(
+                label = "Refunds",
+                value = "$${"%.2f".format(currentMonthRefunds)}",
+                supportingText = "Merchant credits",
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            MetricPanel(
+                label = "Reimbursements",
+                value = "$${"%.2f".format(currentMonthReimbursements)}",
+                supportingText = "Person-to-person offsets",
+                modifier = Modifier.weight(1f)
+            )
+            MetricPanel(
+                label = "Income",
+                value = "$${"%.2f".format(currentMonthIncome)}",
+                supportingText = "Deposits",
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            MetricPanel(
+                label = "Payments",
+                value = "$${"%.2f".format(currentMonthMovements)}",
+                supportingText = "Transfers and card payments",
+                modifier = Modifier.weight(1f)
+            )
+            MetricPanel(
+                label = "Review inbox",
+                value = reviewIssueCount.toString(),
+                supportingText = "Items",
+                modifier = Modifier.weight(1f),
+                emphasized = reviewIssueCount > 0
+            )
+        }
+
+        ListSectionHeader(title = "What stands out")
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surface,
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+            tonalElevation = 0.dp
+        ) {
+            Column {
+                LedgerListRow(
+                    title = "Top category",
+                    supportingText = topCategoryLabel,
+                    leadingText = "C"
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                LedgerListRow(
+                    title = "Top merchant",
+                    supportingText = topMerchantLabel,
+                    leadingText = "M"
+                )
+            }
+        }
+
+        if (currentMonthCategorySummaries.isNotEmpty()) {
+            val categoryBarTotalCents = currentMonthCategorySummaries.sumOf { kotlin.math.abs(it.amountCents) }
+            ListSectionHeader(title = "Spend by category")
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surface,
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                tonalElevation = 0.dp
+            ) {
+                Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                    currentMonthCategorySummaries.forEach { summary ->
+                        val share = if (categoryBarTotalCents > 0) {
+                            kotlin.math.abs(summary.amountCents).toFloat() / categoryBarTotalCents.toFloat()
+                        } else {
+                            0f
+                        }
+                        CategoryBarRow(
+                            label = summary.categoryName,
+                            amountText = formatSignedMoney(summary.amountCents),
+                            supportingText = "${summary.transactionCount} transactions",
+                            progress = share
+                        )
+                    }
+                }
+            }
+        }
+
+        InlineInfoPanel(
+            title = "Setup status",
+            body = "$identifiedSourceCount active sources, $uncategorizedSourceCount source decisions pending, $activeRuleCount saved rules. $rawAlertCount SMS imported, $transactionCount transactions parsed."
+        )
+        return@Column
+
+        FinanceHeroCard(
+            amountText = "$${"%.2f".format(currentMonthSpending)}",
+            title = formatMonthYear(getCurrentMonthStartEpochMs()),
+            subtitle = "$currentMonthExpenseCount spending-impact transactions",
+            trendText = "Month change ${if (delta >= 0) "+" else ""}$${"%.2f".format(delta)}"
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            MetricTile(
+                label = "Income",
+                value = "$${"%.2f".format(currentMonthIncome)}",
+                supportingText = "Deposits this month",
+                modifier = Modifier.weight(1f)
             )
 
-            Text(
-                text = "${formatMonthYear(getCurrentMonthStartEpochMs())} spending across $currentMonthExpenseCount transactions",
-                style = MaterialTheme.typography.bodyMedium
+            MetricTile(
+                label = "Refunds",
+                value = "$${"%.2f".format(currentMonthRefunds)}",
+                supportingText = "Money returned",
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            MetricTile(
+                label = "Payments",
+                value = "$${"%.2f".format(currentMonthMovements)}",
+                supportingText = "Transfers and card payments",
+                modifier = Modifier.weight(1f)
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            MetricTile(
+                label = "Review",
+                value = reviewIssueCount.toString(),
+                supportingText = "Items needing attention",
+                modifier = Modifier.weight(1f)
+            )
+        }
 
-            Text("Previous month: $${"%.2f".format(previousMonthSpending)}")
-            Text("Month change: ${if (delta >= 0) "+" else ""}$${"%.2f".format(delta)}")
-            Text("Income: $${"%.2f".format(currentMonthIncome)}")
-            Text("Refunds: $${"%.2f".format(currentMonthRefunds)}")
-            Text("Payments/transfers: $${"%.2f".format(currentMonthMovements)}")
-            Text("Top category: $topCategoryLabel")
-            Text("Top merchant: $topMerchantLabel")
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp)
+            ) {
+                Text(
+                    text = "What stands out",
+                    style = MaterialTheme.typography.titleSmall
+                )
 
-            Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-            Text("Imported SMS: $rawAlertCount")
-            Text("Sources: $identifiedSourceCount active ($uncategorizedSourceCount to review)")
-            Text("Transactions: $transactionCount ($reviewIssueCount need attention)")
-            Text("Saved rules: $activeRuleCount")
+                Text(
+                    text = "Top category: $topCategoryLabel",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = "Top merchant: $topMerchantLabel",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "$identifiedSourceCount active sources, $uncategorizedSourceCount source decisions pending, $activeRuleCount saved rules",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "$rawAlertCount SMS imported, $transactionCount transactions parsed",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
@@ -5090,7 +7279,10 @@ fun HomeNavCard(
 @Composable
 fun RulesScreen(
     rules: List<TransactionRuleEntity>,
+    transactions: List<TransactionEntity>,
+    rawAlerts: List<RawAlertEntity>,
     onBack: () -> Unit,
+    onOpenParserRuleEditor: (TransactionRuleEntity) -> Unit,
     onDisableRule: (TransactionRuleEntity) -> Unit,
     onDeleteRule: (TransactionRuleEntity) -> Unit
 ) {
@@ -5120,8 +7312,11 @@ fun RulesScreen(
             item {
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Card(
-                    modifier = Modifier.fillMaxWidth()
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                    tonalElevation = 0.dp
                 ) {
                     Column(
                         modifier = Modifier.padding(12.dp)
@@ -5165,7 +7360,7 @@ fun RulesScreen(
 
             item {
                 SourceSectionHeader(
-                    title = "Phrase Rules",
+                    title = "Parser Rules",
                     count = phraseRules.size
                 )
             }
@@ -5181,6 +7376,7 @@ fun RulesScreen(
                 ) { rule ->
                     RuleCard(
                         rule = rule,
+                        onEditRule = { onOpenParserRuleEditor(rule) },
                         onDisableRule = onDisableRule,
                         onDeleteRule = onDeleteRule
                     )
@@ -5193,6 +7389,7 @@ fun RulesScreen(
 @Composable
 fun RuleCard(
     rule: TransactionRuleEntity,
+    onEditRule: (() -> Unit)? = null,
     onDisableRule: (TransactionRuleEntity) -> Unit,
     onDeleteRule: (TransactionRuleEntity) -> Unit
 ) {
@@ -5200,8 +7397,11 @@ fun RuleCard(
         SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
     }
 
-    Card(
-        modifier = Modifier.fillMaxWidth()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
     ) {
         Column(
             modifier = Modifier.padding(12.dp)
@@ -5223,9 +7423,7 @@ fun RuleCard(
             )
 
             val details = listOfNotNull(
-                rule.categoryName?.let {
-                    if (rule.subcategoryName.isNullOrBlank()) it else "$it / ${rule.subcategoryName}"
-                },
+                rule.categoryName,
                 rule.transactionType?.let { treatmentLabel(it) },
                 rule.appliesToTreatment?.let { "Scope: ${treatmentLabel(it)}" },
                 rule.reviewStatus,
@@ -5257,6 +7455,15 @@ fun RuleCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                if (onEditRule != null) {
+                    OutlinedButton(
+                        onClick = onEditRule,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Edit")
+                    }
+                }
+
                 OutlinedButton(
                     onClick = { onDisableRule(rule) },
                     modifier = Modifier.weight(1f)
@@ -5282,10 +7489,15 @@ fun ToolsScreen(
     sourceCount: Int,
     transactionCount: Int,
     activeRuleCount: Int,
+    transactions: List<TransactionEntity>,
     statusText: String,
+    onNavigate: (AppScreen) -> Unit,
+    onQuickActions: () -> Unit,
     onBack: () -> Unit,
+    onOpenSetup: () -> Unit,
     onOpenSources: () -> Unit,
     onOpenRules: () -> Unit,
+    onMerchantSelected: (MerchantSummary) -> Unit,
     onBackfillSmsHistory: () -> Unit,
     onRefreshLatestSms: () -> Unit,
     onDetectSources: () -> Unit,
@@ -5296,17 +7508,52 @@ fun ToolsScreen(
     onExportParserCorpus: () -> Unit,
     onClearAll: () -> Unit
 ) {
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Settings") },
-                navigationIcon = {
-                    TextButton(onClick = onBack) {
-                        Text("Back")
+    var showCategories by remember { mutableStateOf(false) }
+    var showMerchants by remember { mutableStateOf(false) }
+    var showAdvancedTools by remember { mutableStateOf(false) }
+    var confirmClearAll by remember { mutableStateOf(false) }
+
+    val categoryItems = remember(transactions) {
+        transactions
+            .mapNotNull { transaction ->
+                transaction.categoryName
+                    ?.trim()
+                    ?.takeIf {
+                        !isVirtualUncategorizedCategory(it) &&
+                            !it.equals("General", ignoreCase = true)
                     }
+            }
+            .distinctBy { it.lowercase(Locale.US) }
+            .map { category ->
+                val categoryTransactions = transactions.filter {
+                    it.categoryName?.equals(category, ignoreCase = true) == true
                 }
+                MoreCategorySummary(
+                    name = category,
+                    transactionCount = categoryTransactions.size,
+                    spendingImpactCents = categoryTransactions.sumOf {
+                        TransactionTreatments.spendingImpactCents(
+                            treatment = it.accountingTreatment,
+                            excludedFromSpending = it.excludedFromSpending,
+                            amountCents = it.amountCents
+                        )
+                    }
+                )
+            }
+            .sortedWith(
+                compareByDescending<MoreCategorySummary> { kotlin.math.abs(it.spendingImpactCents) }
+                    .thenBy { it.name.lowercase(Locale.US) }
             )
-        }
+    }
+    val merchantItems = remember(transactions) {
+        merchantSummaries(transactions)
+    }
+
+    LedgerAppScaffold(
+        title = "More",
+        activeScreen = AppScreen.TOOLS,
+        onNavigate = onNavigate,
+        onQuickActions = onQuickActions
     ) { padding ->
         LazyColumn(
             modifier = Modifier
@@ -5314,154 +7561,453 @@ fun ToolsScreen(
                 .padding(padding)
                 .padding(horizontal = 16.dp),
             contentPadding = PaddingValues(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
                 Spacer(modifier = Modifier.height(8.dp))
+                MoreSnapshotCard(
+                    transactionCount = transactionCount,
+                    sourceCount = sourceCount,
+                    activeRuleCount = activeRuleCount,
+                    rawAlertCount = rawAlertCount,
+                    statusText = statusText
+                )
+            }
 
-                Card(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp)
-                    ) {
-                        Text(
-                            text = "Tool Status",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Text(statusText)
-                        Text("Imported SMS: $rawAlertCount")
-                        Text("Sources: $sourceCount")
-                        Text("Transactions: $transactionCount")
-                        Text("Saved rules: $activeRuleCount")
-                    }
+            item {
+                MoreSectionHeader("Manage")
+                MoreSectionCard {
+                    MoreActionRow(
+                        leadingText = "C",
+                        title = "Categories",
+                        supportingText = "View categories currently used in your transactions.",
+                        trailingText = if (showCategories) "Hide" else categoryItems.size.toString(),
+                        onClick = { showCategories = !showCategories }
+                    )
+                    MoreDivider()
+                    MoreActionRow(
+                        leadingText = "M",
+                        title = "Merchants",
+                        supportingText = "Browse merchant and payee groups.",
+                        trailingText = if (showMerchants) "Hide" else merchantItems.size.toString(),
+                        onClick = { showMerchants = !showMerchants }
+                    )
+                    MoreDivider()
+                    MoreActionRow(
+                        leadingText = "S",
+                        title = "SMS Sources",
+                        supportingText = "Review senders that LedgerLens can parse.",
+                        onClick = onOpenSources
+                    )
+                    MoreDivider()
+                    MoreActionRow(
+                        leadingText = "R",
+                        title = "Rules",
+                        supportingText = "Manage saved merchant defaults and parser aliases.",
+                        trailingText = activeRuleCount.toString(),
+                        onClick = onOpenRules
+                    )
                 }
             }
 
-            item {
-                ToolActionCard(
-                    title = "Source Setup",
-                    description = "Manage SMS senders, source types, and ignored sources.",
-                    buttonText = "Manage Sources",
-                    onClick = onOpenSources
-                )
-            }
-
-            item {
-                ToolActionCard(
-                    title = "Rules",
-                    description = "Review saved merchant defaults and phrase rules.",
-                    buttonText = "Manage Rules",
-                    onClick = onOpenRules
-                )
-            }
-
-            item {
-                ToolActionCard(
-                    title = "Backfill SMS History",
-                    description = "Import financial-looking SMS messages from the last several years.",
-                    buttonText = "Backfill SMS",
-                    onClick = onBackfillSmsHistory
-                )
-            }
-
-            item {
-                ToolActionCard(
-                    title = "Refresh Latest SMS",
-                    description = "Import newer financial-looking SMS messages. Existing SMS ids are skipped.",
-                    buttonText = "Refresh SMS",
-                    onClick = onRefreshLatestSms
-                )
-            }
-
-            item {
-                ToolActionCard(
-                    title = "Detect Sources",
-                    description = "Group imported SMS messages by sender and detect possible financial sources.",
-                    buttonText = "Detect Sources",
-                    onClick = onDetectSources
-                )
-            }
-
-            item {
-                ToolActionCard(
-                    title = "Parse Identified Sources",
-                    description = "Parse transactions only from sources you marked as valid.",
-                    buttonText = "Parse Sources",
-                    onClick = onParseIdentifiedSources
-                )
-            }
-
-            item {
-                ToolActionCard(
-                    title = "Reparse Transactions",
-                    description = "Clear parsed transactions and rebuild them from identified SMS using current parser and saved rules.",
-                    buttonText = "Reparse Transactions",
-                    onClick = onReparseTransactions
-                )
-            }
-
-            item {
-                ToolActionCard(
-                    title = "Reapply Saved Rules",
-                    description = "Apply saved merchant and phrase rules to transactions that already exist.",
-                    buttonText = "Reapply Rules",
-                    onClick = onReapplySavedRules
-                )
-            }
-
-            item {
-                ToolActionCard(
-                    title = "Export Transactions",
-                    description = "Create a CSV file and open Android sharing so you can save or send your transaction data.",
-                    buttonText = "Export CSV",
-                    onClick = onExportTransactions
-                )
-            }
-
-            item {
-                ToolActionCard(
-                    title = "Export Parser Corpus",
-                    description = "Create a JSONL debugging corpus with raw SMS, parser output, and user corrections for parser tuning.",
-                    buttonText = "Export JSONL",
-                    onClick = onExportParserCorpus
-                )
-            }
-
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp)
-                    ) {
-                        Text(
-                            text = "Danger Zone",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Text(
-                            text = "Clears imported SMS, sources, rules, and transactions from the local test database.",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        OutlinedButton(
-                            onClick = onClearAll,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Clear All Test Data")
+            if (showCategories) {
+                item {
+                    MoreSectionCard {
+                        if (categoryItems.isEmpty()) {
+                            MoreBodyText("No saved categories yet. Categories appear here after you assign them to merchants or transactions.")
+                        } else {
+                            categoryItems.take(12).forEachIndexed { index, category ->
+                                MoreActionRow(
+                                    leadingText = categoryGlyph(category.name),
+                                    title = category.name,
+                                    supportingText = "${category.transactionCount} transactions",
+                                    trailingText = formatSignedMoney(category.spendingImpactCents),
+                                    onClick = null
+                                )
+                                if (index < categoryItems.take(12).lastIndex) {
+                                    MoreDivider()
+                                }
+                            }
                         }
                     }
                 }
             }
+
+            if (showMerchants) {
+                item {
+                    MoreSectionCard {
+                        if (merchantItems.isEmpty()) {
+                            MoreBodyText("No merchants or payees yet. They appear after transactions are parsed.")
+                        } else {
+                            merchantItems.take(12).forEachIndexed { index, merchant ->
+                                MoreActionRow(
+                                    leadingText = merchant.merchantName.take(1).uppercase(Locale.US),
+                                    title = merchant.merchantName,
+                                    supportingText = "${merchant.transactionCount} transactions",
+                                    trailingText = formatSignedMoney(merchant.spendingAmountCents),
+                                    onClick = { onMerchantSelected(merchant) }
+                                )
+                                if (index < merchantItems.take(12).lastIndex) {
+                                    MoreDivider()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                MoreSectionHeader("Import & Export")
+                MoreSectionCard {
+                    MoreActionRow(
+                        leadingText = "I",
+                        title = "Import SMS / setup",
+                        supportingText = "Review possible financial senders and setup SMS parsing.",
+                        onClick = onOpenSetup
+                    )
+                    MoreDivider()
+                    MoreActionRow(
+                        leadingText = "N",
+                        title = "Refresh latest SMS",
+                        supportingText = "Import new financial SMS messages.",
+                        onClick = onRefreshLatestSms
+                    )
+                    MoreDivider()
+                    MoreActionRow(
+                        leadingText = "H",
+                        title = "Backfill SMS history",
+                        supportingText = "Import older financial SMS messages.",
+                        onClick = onBackfillSmsHistory
+                    )
+                    MoreDivider()
+                    MoreActionRow(
+                        leadingText = "E",
+                        title = "Export transactions",
+                        supportingText = "Share a CSV of your transaction data.",
+                        onClick = onExportTransactions
+                    )
+                    MoreDivider()
+                    MoreActionRow(
+                        leadingText = "P",
+                        title = "Export parser examples",
+                        supportingText = "Share local SMS examples for improving merchant parsing.",
+                        onClick = onExportParserCorpus
+                    )
+                }
+            }
+
+            item {
+                MoreSectionHeader("Tools")
+                MoreSectionCard {
+                    MoreActionRow(
+                        leadingText = "A",
+                        title = "Reapply saved rules",
+                        supportingText = "Update existing transactions using your saved rules.",
+                        onClick = onReapplySavedRules
+                    )
+                    MoreDivider()
+                    MoreActionRow(
+                        leadingText = "D",
+                        title = "Advanced tools",
+                        supportingText = "Source detection, reprocessing, and diagnostics.",
+                        trailingText = if (showAdvancedTools) "Hide" else ">",
+                        onClick = { showAdvancedTools = !showAdvancedTools }
+                    )
+                }
+            }
+
+            if (showAdvancedTools) {
+                item {
+                    MoreSectionCard {
+                        MoreActionRow(
+                            leadingText = "F",
+                            title = "Detect SMS sources",
+                            supportingText = "Find possible financial SMS senders from imported messages.",
+                            onClick = onDetectSources
+                        )
+                        MoreDivider()
+                        MoreActionRow(
+                            leadingText = "P",
+                            title = "Process approved sources",
+                            supportingText = "Parse transactions from sources you approved.",
+                            onClick = onParseIdentifiedSources
+                        )
+                        MoreDivider()
+                        MoreActionRow(
+                            leadingText = "B",
+                            title = "Rebuild transactions",
+                            supportingText = "Recreate parsed transactions using current parser and rules.",
+                            onClick = onReparseTransactions
+                        )
+                        MoreDivider()
+                        if (confirmClearAll) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "Clear local test data?",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "This removes imported SMS, sources, rules, and transactions from this local database.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = { confirmClearAll = false },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Cancel")
+                                    }
+                                    Button(
+                                        onClick = {
+                                            confirmClearAll = false
+                                            onClearAll()
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Clear")
+                                    }
+                                }
+                            }
+                        } else {
+                            MoreActionRow(
+                                leadingText = "X",
+                                title = "Clear local test data",
+                                supportingText = "Remove imported SMS, sources, rules, and transactions.",
+                                trailingText = "Confirm",
+                                onClick = { confirmClearAll = true }
+                            )
+                        }
+                    }
+                }
+            }
+
+            item {
+                MoreSectionHeader("App")
+                MoreSectionCard {
+                    MoreActionRow(
+                        leadingText = "S",
+                        title = "Settings",
+                        supportingText = "Preferences will live here as the app grows.",
+                        trailingText = "",
+                        onClick = null
+                    )
+                    MoreDivider()
+                    MoreActionRow(
+                        leadingText = "L",
+                        title = "Privacy & security",
+                        supportingText = "Your SMS and transaction data stay on this device.",
+                        trailingText = "",
+                        onClick = null
+                    )
+                    MoreDivider()
+                    MoreActionRow(
+                        leadingText = "?",
+                        title = "Help",
+                        supportingText = "LedgerLens is still a local personal app.",
+                        trailingText = "",
+                        onClick = null
+                    )
+                    MoreDivider()
+                    MoreActionRow(
+                        leadingText = "i",
+                        title = "App information",
+                        supportingText = "Package com.example.ledgerlens.",
+                        trailingText = "",
+                        onClick = null
+                    )
+                }
+            }
         }
+    }
+}
+
+data class MoreCategorySummary(
+    val name: String,
+    val transactionCount: Int,
+    val spendingImpactCents: Long
+)
+
+@Composable
+fun MoreSnapshotCard(
+    transactionCount: Int,
+    sourceCount: Int,
+    activeRuleCount: Int,
+    rawAlertCount: Int,
+    statusText: String
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = "LedgerLens",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+            )
+            Text(
+                text = "$transactionCount transactions from $sourceCount SMS sources",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+            )
+            Text(
+                text = "$rawAlertCount imported SMS - $activeRuleCount saved rules",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (statusText.isNotBlank()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
+                    contentColor = MaterialTheme.colorScheme.primary,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = statusText,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MoreSectionHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp)
+    )
+}
+
+@Composable
+fun MoreSectionCard(content: @Composable () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
+    ) {
+        Column {
+            content()
+        }
+    }
+}
+
+@Composable
+fun MoreActionRow(
+    leadingText: String,
+    title: String,
+    supportingText: String,
+    modifier: Modifier = Modifier,
+    trailingText: String = ">",
+    onClick: (() -> Unit)? = null
+) {
+    val colors = MaterialTheme.colorScheme
+    val rowModifier = modifier
+        .fillMaxWidth()
+        .then(
+            if (onClick != null) {
+                Modifier.clickable { onClick() }
+            } else {
+                Modifier
+            }
+        )
+        .padding(horizontal = 12.dp, vertical = 10.dp)
+
+    Row(
+        modifier = rowModifier,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+    ) {
+        Surface(
+            color = moreAccentColor(title).copy(alpha = 0.14f),
+            contentColor = moreAccentColor(title),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+        ) {
+            Text(
+                text = leadingText.take(2),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+            )
+        }
+
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+            Text(
+                text = supportingText,
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.onSurfaceVariant,
+                maxLines = 2,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+        }
+
+        Text(
+            text = trailingText,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (onClick != null) colors.primary else colors.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+fun MoreBodyText(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(12.dp)
+    )
+}
+
+@Composable
+fun MoreDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(start = 58.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+    )
+}
+
+fun moreAccentColor(key: String): Color {
+    val normalized = key.lowercase(Locale.US)
+    return when {
+        "categor" in normalized -> Color(0xFF21A66B)
+        "merchant" in normalized -> Color(0xFF9B6CF3)
+        "source" in normalized || "sms" in normalized -> Color(0xFF5D9CEC)
+        "rule" in normalized -> Color(0xFFFF8A3D)
+        "import" in normalized || "refresh" in normalized || "backfill" in normalized -> Color(0xFF43B86B)
+        "export" in normalized -> Color(0xFF7C5CFF)
+        "advanced" in normalized || "detect" in normalized || "process" in normalized -> Color(0xFFFFB33F)
+        "clear" in normalized -> Color(0xFFE85D5D)
+        "privacy" in normalized -> Color(0xFF21A66B)
+        else -> Color(0xFF6E7B8B)
     }
 }
 
@@ -5472,250 +8018,19 @@ fun ToolActionCard(
     buttonText: String,
     onClick: () -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
     ) {
-        Column(
-            modifier = Modifier.padding(12.dp)
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Text(
-                text = description,
-                style = MaterialTheme.typography.bodyMedium
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Button(
-                onClick = onClick,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(buttonText)
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun MerchantReviewScreen(
-    transactions: List<TransactionEntity>,
-    onBack: () -> Unit,
-    onMerchantSelected: (MerchantSummary) -> Unit
-) {
-    var searchText by remember {
-        mutableStateOf("")
-    }
-
-    val merchantSummaries = remember(transactions) {
-        transactions
-            .filter {
-                !it.displayMerchantName.isNullOrBlank() ||
-                        !it.merchantRaw.isNullOrBlank()
-            }
-            .groupBy {
-                (it.displayMerchantName ?: it.merchantRaw ?: "Unknown merchant").trim()
-            }
-            .map { (merchantName, group) ->
-                val expenseGroup = group.filter {
-                    TransactionTreatments.countsAsSpending(
-                        treatment = it.accountingTreatment,
-                        excludedFromSpending = it.excludedFromSpending
-                    )
-                }
-
-                val primaryTreatment = group
-                    .groupingBy { it.accountingTreatment }
-                    .eachCount()
-                    .maxByOrNull { it.value }
-                    ?.key
-                    ?: TransactionTreatments.UNKNOWN
-
-                val categoryPairs = group
-                    .mapNotNull { transaction ->
-                        val category = transaction.categoryName
-                        if (category.isNullOrBlank()) {
-                            null
-                        } else {
-                            category to transaction.subcategoryName
-                        }
-                    }
-
-                val mostCommonCategory = categoryPairs
-                    .groupingBy { it }
-                    .eachCount()
-                    .maxByOrNull { it.value }
-                    ?.key
-
-                MerchantSummary(
-                    merchantName = merchantName,
-                    transactionCount = group.size,
-                    totalAmountCents = expenseGroup.sumOf { it.amountCents },
-                    primaryTreatment = primaryTreatment,
-                    categoryName = mostCommonCategory?.first,
-                    subcategoryName = mostCommonCategory?.second,
-                    uncategorizedCount = group.count {
-                        TransactionTreatments.countsAsSpending(
-                            treatment = it.accountingTreatment,
-                            excludedFromSpending = it.excludedFromSpending
-                        ) &&
-                                it.categoryName.isNullOrBlank()
-                    },
-                    latestTransactionEpochMs = group.maxOf { it.occurredAtEpochMs }
-                )
-            }
-            .sortedWith(
-                compareByDescending<MerchantSummary> { it.uncategorizedCount }
-                    .thenByDescending { it.totalAmountCents }
-                    .thenByDescending { it.transactionCount }
-                    .thenBy { it.merchantName.lowercase(Locale.US) }
-            )
-    }
-
-    val visibleMerchants = remember(merchantSummaries, searchText) {
-        val query = searchText.trim().lowercase(Locale.US)
-        if (query.isBlank()) {
-            merchantSummaries
-        } else {
-            merchantSummaries.filter { merchant ->
-                listOfNotNull(
-                    merchant.merchantName,
-                    merchant.primaryTreatment,
-                    merchant.categoryName,
-                    merchant.subcategoryName
-                ).any { it.lowercase(Locale.US).contains(query) }
-            }
-        }
-    }
-
-    val uncategorizedMerchants = visibleMerchants.filter { it.uncategorizedCount > 0 }
-    val categorizedMerchants = visibleMerchants.filter { it.uncategorizedCount == 0 }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Merchant Review") },
-                navigationIcon = {
-                    TextButton(onClick = onBack) {
-                        Text("Back")
-                    }
-                }
-            )
-        }
-    ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp),
-            contentPadding = PaddingValues(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-
-                MerchantReviewSummaryCard(
-                    totalMerchants = merchantSummaries.size,
-                    uncategorizedMerchants = uncategorizedMerchants.size,
-                    categorizedMerchants = categorizedMerchants.size
-                )
-            }
-
-            item {
-                OutlinedTextField(
-                    value = searchText,
-                    onValueChange = { searchText = it },
-                    label = { Text("Search merchants") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-            }
-
-            item {
-                SourceSectionHeader(
-                    title = "Needs Merchant Category",
-                    count = uncategorizedMerchants.size
-                )
-            }
-
-            if (uncategorizedMerchants.isEmpty()) {
-                item {
-                    EmptySectionText("No merchants need category assignment.")
-                }
-            } else {
-                items(
-                    items = uncategorizedMerchants,
-                    key = { it.merchantName }
-                ) { merchant ->
-                    MerchantSummaryCard(
-                        merchant = merchant,
-                        onClick = { onMerchantSelected(merchant) }
-                    )
-                }
-            }
-
-            item {
-                SourceSectionHeader(
-                    title = "Categorized Merchants",
-                    count = categorizedMerchants.size
-                )
-            }
-
-            if (categorizedMerchants.isEmpty()) {
-                item {
-                    EmptySectionText("No categorized merchants yet.")
-                }
-            } else {
-                items(
-                    items = categorizedMerchants,
-                    key = { it.merchantName }
-                ) { merchant ->
-                    MerchantSummaryCard(
-                        merchant = merchant,
-                        onClick = { onMerchantSelected(merchant) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun MerchantReviewSummaryCard(
-    totalMerchants: Int,
-    uncategorizedMerchants: Int,
-    categorizedMerchants: Int
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp)
-        ) {
-            Text(
-                text = "Merchant Summary",
-                style = MaterialTheme.typography.titleMedium
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Text("Total merchants/payees: $totalMerchants")
-            Text("Need category: $uncategorizedMerchants")
-            Text("Categorized: $categorizedMerchants")
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Text(
-                text = "This groups parsed transactions by merchant/payee. Category assignments are saved as merchant defaults for future parses.",
-                style = MaterialTheme.typography.labelSmall
-            )
-        }
+        LedgerListRow(
+            title = title,
+            supportingText = description,
+            trailingText = buttonText,
+            leadingText = title.take(1),
+            onClick = onClick
+        )
     }
 }
 
@@ -5728,7 +8043,7 @@ fun MerchantSummaryCard(
         SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
     }
 
-    val amount = merchant.totalAmountCents / 100.0
+    val activityAmount = merchant.totalAmountCents / 100.0
 
     Card(
         modifier = Modifier
@@ -5738,37 +8053,40 @@ fun MerchantSummaryCard(
         Column(
             modifier = Modifier.padding(12.dp)
         ) {
-            Text(
-                text = merchant.merchantName,
-                style = MaterialTheme.typography.titleSmall
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = merchant.merchantName,
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f)
+                )
 
-            Spacer(modifier = Modifier.height(4.dp))
+                TreatmentChip(label = treatmentLabel(merchant.primaryTreatment))
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Transactions: ${merchant.transactionCount} • Uncategorized expenses: ${merchant.uncategorizedCount}",
+                text = "Transactions: ${merchant.transactionCount} - Uncategorized expenses: ${merchant.uncategorizedCount}",
                 style = MaterialTheme.typography.bodyMedium
             )
 
             Text(
-                text = "Included expense total: $${"%.2f".format(amount)}",
+                text = "Activity total: $${"%.2f".format(activityAmount)}",
                 style = MaterialTheme.typography.labelSmall
             )
 
             Text(
-                text = "Usual treatment: ${treatmentLabel(merchant.primaryTreatment)}",
+                text = "Net spending impact: ${formatSignedMoney(merchant.spendingAmountCents)}",
                 style = MaterialTheme.typography.labelSmall
             )
 
             val categoryText = if (merchant.categoryName.isNullOrBlank()) {
                 "No default category"
             } else {
-                merchant.categoryName +
-                        if (!merchant.subcategoryName.isNullOrBlank()) {
-                            " / ${merchant.subcategoryName}"
-                        } else {
-                            ""
-                        }
+                merchant.categoryName
             }
 
             Text(
@@ -5794,18 +8112,22 @@ fun MerchantSummaryCard(
 fun MerchantDetailScreen(
     merchant: MerchantSummary,
     transactions: List<TransactionEntity>,
+    allTransactions: List<TransactionEntity>,
+    rawAlerts: List<RawAlertEntity>,
     onBack: () -> Unit,
-    onUpdateMerchantCategory: (String, String, String, Boolean, Boolean) -> Unit,
+    onUpdateMerchantCategory: (String, String, Boolean, Boolean) -> Unit,
+    onRenameMerchantGroup: (String) -> Unit,
+    onOpenParserRuleEditor: (MerchantAliasRuleDraft) -> Unit,
     onTransactionSelected: (TransactionEntity) -> Unit
 ) {
     val expenseTotal = transactions
-        .filter {
-            TransactionTreatments.countsAsSpending(
+        .sumOf {
+            TransactionTreatments.spendingImpactCents(
                 treatment = it.accountingTreatment,
-                excludedFromSpending = it.excludedFromSpending
+                excludedFromSpending = it.excludedFromSpending,
+                amountCents = it.amountCents
             )
         }
-        .sumOf { it.amountCents }
 
     Scaffold(
         topBar = {
@@ -5834,6 +8156,17 @@ fun MerchantDetailScreen(
                     merchant = merchant,
                     transactionCount = transactions.size,
                     expenseTotalCents = expenseTotal
+                )
+            }
+
+            item {
+                MerchantNameToolsCard(
+                    merchant = merchant,
+                    transactions = transactions,
+                    allTransactions = allTransactions,
+                    rawAlerts = rawAlerts,
+                    onRenameMerchantGroup = onRenameMerchantGroup,
+                    onOpenParserRuleEditor = onOpenParserRuleEditor
                 )
             }
 
@@ -5877,8 +8210,6 @@ fun MerchantDetailSummaryCard(
     transactionCount: Int,
     expenseTotalCents: Long
 ) {
-    val amount = expenseTotalCents / 100.0
-
     Card(
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -5893,19 +8224,14 @@ fun MerchantDetailSummaryCard(
             Spacer(modifier = Modifier.height(6.dp))
 
             Text("Transactions: $transactionCount")
-            Text("Included expense total: $${"%.2f".format(amount)}")
+            Text("Net spending impact: ${formatSignedMoney(expenseTotalCents)}")
             Text("Usual treatment: ${treatmentLabel(merchant.primaryTreatment)}")
             Text("Uncategorized expenses: ${merchant.uncategorizedCount}")
 
             val categoryText = if (merchant.categoryName.isNullOrBlank()) {
                 "No category assigned"
             } else {
-                merchant.categoryName +
-                        if (!merchant.subcategoryName.isNullOrBlank()) {
-                            " / ${merchant.subcategoryName}"
-                        } else {
-                            ""
-                        }
+                merchant.categoryName
             }
 
             Text("Current merchant category: $categoryText")
@@ -5914,16 +8240,84 @@ fun MerchantDetailSummaryCard(
 }
 
 @Composable
+fun MerchantNameToolsCard(
+    merchant: MerchantSummary,
+    transactions: List<TransactionEntity>,
+    allTransactions: List<TransactionEntity>,
+    rawAlerts: List<RawAlertEntity>,
+    onRenameMerchantGroup: (String) -> Unit,
+    onOpenParserRuleEditor: (MerchantAliasRuleDraft) -> Unit
+) {
+    var displayName by remember(merchant.merchantName) {
+        mutableStateOf(merchant.merchantName)
+    }
+    val primaryTransaction = transactions.firstOrNull()
+    val rawAlert = primaryTransaction?.let { transaction ->
+        rawAlerts.firstOrNull { it.id == transaction.rawAlertId }
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = "Merchant Name",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Text(
+                text = "Rename this existing group for your records, or teach the parser aliases that should become this merchant in the future.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedTextField(
+                value = displayName,
+                onValueChange = { displayName = it },
+                label = { Text("Display name") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            Button(
+                onClick = { onRenameMerchantGroup(displayName) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Rename Existing Transactions")
+            }
+            OutlinedButton(
+                onClick = {
+                    if (primaryTransaction != null) {
+                        onOpenParserRuleEditor(
+                            buildMerchantAliasDraftForTransaction(
+                                transaction = primaryTransaction,
+                                rawAlert = rawAlert,
+                                allTransactions = allTransactions,
+                                includeCategory = false,
+                                includeTreatment = false
+                            ).copy(canonicalMerchantName = displayName)
+                        )
+                    }
+                },
+                enabled = primaryTransaction != null,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Fix Parser Rule")
+            }
+        }
+    }
+}
+
+@Composable
 fun MerchantCategoryAssignmentCard(
     merchant: MerchantSummary,
-    onUpdateMerchantCategory: (String, String, String, Boolean, Boolean) -> Unit
+    onUpdateMerchantCategory: (String, String, Boolean, Boolean) -> Unit
 ) {
     var categoryText by remember(merchant.merchantName, merchant.categoryName) {
         mutableStateOf(merchant.categoryName ?: "")
-    }
-
-    var subcategoryText by remember(merchant.merchantName, merchant.subcategoryName) {
-        mutableStateOf(merchant.subcategoryName ?: "")
     }
 
     var treatmentText by remember(merchant.merchantName, merchant.primaryTreatment) {
@@ -5939,17 +8333,17 @@ fun MerchantCategoryAssignmentCard(
     }
 
     val presets = listOf(
-        "Groceries" to "General",
-        "Restaurants" to "Dining Out",
-        "Gas" to "Fuel",
-        "Shopping" to "General",
-        "Bills & Utilities" to "General",
-        "Subscriptions" to "General",
-        "Healthcare" to "General",
-        "Travel" to "General",
-        "Charity" to "Donation",
-        "Transfer" to "Internal",
-        "Other" to "Uncategorized"
+        "Groceries",
+        "Restaurants",
+        "Gas",
+        "Shopping",
+        "Bills & Utilities",
+        "Subscriptions",
+        "Healthcare",
+        "Travel",
+        "Charity",
+        "Transfer",
+        "Other"
     )
 
     Card(
@@ -5973,12 +8367,10 @@ fun MerchantCategoryAssignmentCard(
                     rowItems.forEach { preset ->
                         OutlinedButton(
                             onClick = {
-                                categoryText = preset.first
-                                subcategoryText = preset.second
+                                categoryText = preset
                                 treatmentText = TransactionTreatments.EXPENSE
                                 onUpdateMerchantCategory(
                                     categoryText,
-                                    subcategoryText,
                                     treatmentText,
                                     applyCategoryAutomatically,
                                     requiresReview
@@ -5986,7 +8378,7 @@ fun MerchantCategoryAssignmentCard(
                             },
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text(preset.first)
+                            Text(preset)
                         }
                     }
 
@@ -6009,7 +8401,8 @@ fun MerchantCategoryAssignmentCard(
 
             listOf(
                 listOf(TransactionTreatments.EXPENSE, TransactionTreatments.INCOME),
-                listOf(TransactionTreatments.REFUND, TransactionTreatments.CREDIT_CARD_PAYMENT),
+                listOf(TransactionTreatments.REFUND, TransactionTreatments.REIMBURSEMENT),
+                listOf(TransactionTreatments.CREDIT_CARD_PAYMENT, TransactionTreatments.UNKNOWN),
                 listOf(TransactionTreatments.TRANSFER, TransactionTreatments.PERSON_TO_PERSON)
             ).forEach { rowItems ->
                 Row(
@@ -6071,21 +8464,10 @@ fun MerchantCategoryAssignmentCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            OutlinedTextField(
-                value = subcategoryText,
-                onValueChange = { subcategoryText = it },
-                label = { Text("Subcategory") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
             Button(
                 onClick = {
                     onUpdateMerchantCategory(
                         categoryText,
-                        subcategoryText,
                         treatmentText,
                         applyCategoryAutomatically,
                         requiresReview
@@ -6141,6 +8523,11 @@ fun MerchantTransactionCard(
     }
 
     val amount = transaction.amountCents / 100.0
+    val spendingImpact = TransactionTreatments.spendingImpactCents(
+        treatment = transaction.accountingTreatment,
+        excludedFromSpending = transaction.excludedFromSpending,
+        amountCents = transaction.amountCents
+    )
 
     Card(
         modifier = Modifier
@@ -6151,19 +8538,30 @@ fun MerchantTransactionCard(
             modifier = Modifier.padding(12.dp)
         ) {
             Text(
-                text = "$${"%.2f".format(amount)} • ${treatmentLabel(transaction.accountingTreatment)}",
+                text = "$${"%.2f".format(amount)} - ${treatmentLabel(transaction.accountingTreatment)}",
                 style = MaterialTheme.typography.bodyLarge
             )
+
+            if (spendingImpact != 0L) {
+                Text(
+                    text = "Spending impact: ${formatSignedMoney(spendingImpact)}",
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+
+            if (!transaction.spendingMerchantName.isNullOrBlank()) {
+                Text(
+                    text = "Spending merchant: ${transaction.spendingMerchantName}",
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
 
             Text(
                 text = formatter.format(Date(transaction.occurredAtEpochMs)),
                 style = MaterialTheme.typography.labelSmall
             )
 
-            val categoryText = listOfNotNull(
-                transaction.categoryName,
-                transaction.subcategoryName
-            ).joinToString(" / ")
+            val categoryText = transaction.categoryName.orEmpty()
 
             if (categoryText.isNotBlank()) {
                 Text(

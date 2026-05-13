@@ -24,7 +24,6 @@ data class TransactionRuleEntity(
 
     val merchantName: String? = null,
     val categoryName: String? = null,
-    val subcategoryName: String? = null,
 
     val transactionType: String? = null,
     val reviewStatus: String? = null,

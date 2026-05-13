@@ -2,15 +2,18 @@ package com.example.ledgerlens.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val LedgerTeal80 = Color(0xFF7FD7CB)
-val LedgerBlue80 = Color(0xFFB7C8FF)
-val LedgerGold80 = Color(0xFFE7C56C)
+val LedgerTeal80 = Color(0xFF86DCCF)
+val LedgerBlue80 = Color(0xFFAFC8FF)
+val LedgerGold80 = Color(0xFFE9C66A)
 
-val LedgerTeal40 = Color(0xFF006B60)
-val LedgerBlue40 = Color(0xFF36518F)
-val LedgerGold40 = Color(0xFF7A5B00)
+val LedgerTeal40 = Color(0xFF24966F)
+val LedgerBlue40 = Color(0xFF5877A8)
+val LedgerGold40 = Color(0xFFB87514)
 
-val LedgerBackground = Color(0xFFF7FAF8)
+val LedgerBackground = Color(0xFFF7F8FA)
 val LedgerSurface = Color(0xFFFFFFFF)
-val LedgerDarkBackground = Color(0xFF101413)
+val LedgerSurfaceVariant = Color(0xFFEAF1EE)
+val LedgerOutline = Color(0xFFC9D4CF)
+val LedgerDarkBackground = Color(0xFF0F1413)
 val LedgerDarkSurface = Color(0xFF18201E)
+val LedgerDarkSurfaceVariant = Color(0xFF34433F)

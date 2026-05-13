@@ -22,7 +22,7 @@ import com.example.ledgerlens.data.entity.TransactionRuleEntity
         FinancialSourceEntity::class,
         TransactionRuleEntity::class
     ],
-    version = 6,
+    version = 8,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -102,7 +102,6 @@ abstract class AppDatabase : RoomDatabase() {
         private val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE transactions ADD COLUMN categoryName TEXT")
-                db.execSQL("ALTER TABLE transactions ADD COLUMN subcategoryName TEXT")
             }
         }
 
@@ -117,7 +116,6 @@ abstract class AppDatabase : RoomDatabase() {
                 normalizedMatchPhrase TEXT NOT NULL,
                 merchantName TEXT,
                 categoryName TEXT,
-                subcategoryName TEXT,
                 transactionType TEXT,
                 reviewStatus TEXT,
                 excludedFromSpending INTEGER,
@@ -150,6 +148,176 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS transactions_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        rawAlertId INTEGER NOT NULL,
+                        sourceKey TEXT NOT NULL,
+                        transactionType TEXT NOT NULL,
+                        accountingTreatment TEXT NOT NULL,
+                        amountCents INTEGER NOT NULL,
+                        currency TEXT NOT NULL,
+                        merchantRaw TEXT,
+                        displayMerchantName TEXT,
+                        sourceInstitution TEXT,
+                        accountHint TEXT,
+                        occurredAtEpochMs INTEGER NOT NULL,
+                        receivedAtEpochMs INTEGER NOT NULL,
+                        parseConfidence REAL NOT NULL,
+                        reviewStatus TEXT NOT NULL,
+                        excludedFromSpending INTEGER NOT NULL,
+                        parserNotes TEXT,
+                        merchantUserEdited INTEGER NOT NULL,
+                        categoryUserEdited INTEGER NOT NULL,
+                        treatmentUserEdited INTEGER NOT NULL,
+                        createdAtEpochMs INTEGER NOT NULL,
+                        updatedAtEpochMs INTEGER NOT NULL,
+                        categoryName TEXT
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO transactions_new (
+                        id,
+                        rawAlertId,
+                        sourceKey,
+                        transactionType,
+                        accountingTreatment,
+                        amountCents,
+                        currency,
+                        merchantRaw,
+                        displayMerchantName,
+                        sourceInstitution,
+                        accountHint,
+                        occurredAtEpochMs,
+                        receivedAtEpochMs,
+                        parseConfidence,
+                        reviewStatus,
+                        excludedFromSpending,
+                        parserNotes,
+                        merchantUserEdited,
+                        categoryUserEdited,
+                        treatmentUserEdited,
+                        createdAtEpochMs,
+                        updatedAtEpochMs,
+                        categoryName
+                    )
+                    SELECT
+                        id,
+                        rawAlertId,
+                        sourceKey,
+                        transactionType,
+                        accountingTreatment,
+                        amountCents,
+                        currency,
+                        merchantRaw,
+                        displayMerchantName,
+                        sourceInstitution,
+                        accountHint,
+                        occurredAtEpochMs,
+                        receivedAtEpochMs,
+                        parseConfidence,
+                        reviewStatus,
+                        excludedFromSpending,
+                        parserNotes,
+                        merchantUserEdited,
+                        categoryUserEdited,
+                        treatmentUserEdited,
+                        createdAtEpochMs,
+                        updatedAtEpochMs,
+                        categoryName
+                    FROM transactions
+                    """.trimIndent()
+                )
+                db.execSQL("DROP TABLE transactions")
+                db.execSQL("ALTER TABLE transactions_new RENAME TO transactions")
+                db.execSQL(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS index_transactions_rawAlertId
+                    ON transactions(rawAlertId)
+                    """.trimIndent()
+                )
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS transaction_rules_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        sourceKey TEXT NOT NULL,
+                        matchPhrase TEXT NOT NULL,
+                        normalizedMatchPhrase TEXT NOT NULL,
+                        merchantName TEXT,
+                        categoryName TEXT,
+                        transactionType TEXT,
+                        reviewStatus TEXT,
+                        excludedFromSpending INTEGER,
+                        appliesToTreatment TEXT,
+                        applyCategoryAutomatically INTEGER NOT NULL,
+                        requiresReview INTEGER NOT NULL,
+                        active INTEGER NOT NULL,
+                        createdAtEpochMs INTEGER NOT NULL,
+                        updatedAtEpochMs INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO transaction_rules_new (
+                        id,
+                        sourceKey,
+                        matchPhrase,
+                        normalizedMatchPhrase,
+                        merchantName,
+                        categoryName,
+                        transactionType,
+                        reviewStatus,
+                        excludedFromSpending,
+                        appliesToTreatment,
+                        applyCategoryAutomatically,
+                        requiresReview,
+                        active,
+                        createdAtEpochMs,
+                        updatedAtEpochMs
+                    )
+                    SELECT
+                        id,
+                        sourceKey,
+                        matchPhrase,
+                        normalizedMatchPhrase,
+                        merchantName,
+                        categoryName,
+                        transactionType,
+                        reviewStatus,
+                        excludedFromSpending,
+                        appliesToTreatment,
+                        applyCategoryAutomatically,
+                        requiresReview,
+                        active,
+                        createdAtEpochMs,
+                        updatedAtEpochMs
+                    FROM transaction_rules
+                    """.trimIndent()
+                )
+                db.execSQL("DROP TABLE transaction_rules")
+                db.execSQL("ALTER TABLE transaction_rules_new RENAME TO transaction_rules")
+                db.execSQL(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS index_transaction_rules_sourceKey_normalizedMatchPhrase
+                    ON transaction_rules(sourceKey, normalizedMatchPhrase)
+                    """.trimIndent()
+                )
+            }
+        }
+
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE transactions ADD COLUMN spendingMerchantName TEXT")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -162,7 +330,9 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_2_3,
                         MIGRATION_3_4,
                         MIGRATION_4_5,
-                        MIGRATION_5_6
+                        MIGRATION_5_6,
+                        MIGRATION_6_7,
+                        MIGRATION_7_8
                     )
                     .build()
                     .also { INSTANCE = it }

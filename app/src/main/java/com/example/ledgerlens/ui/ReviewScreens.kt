@@ -35,6 +35,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -96,8 +97,6 @@ import com.example.ledgerlens.ui.components.ListSectionHeader
 import com.example.ledgerlens.ui.components.MetricPanel
 import com.example.ledgerlens.ui.components.MetricTile
 import com.example.ledgerlens.ui.components.MiniTrendStrip
-import com.example.ledgerlens.ui.components.QuickActionItem
-import com.example.ledgerlens.ui.components.QuickActionSheet
 import com.example.ledgerlens.ui.components.StatStrip
 import com.example.ledgerlens.ui.components.StatStripItem
 import com.example.ledgerlens.ui.components.TreatmentChip
@@ -110,17 +109,47 @@ import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+fun defaultReviewQueueFilter(transactions: List<TransactionEntity>): ReviewQueueFilter? {
+    val issueTransactions = transactions.filter { hasAnyReviewIssue(it) }
+    return when {
+        transactions.any { hasMissingCategory(it) } -> ReviewQueueFilter.MISSING_CATEGORY
+        transactions.any { it.reviewStatus == "NEEDS_REVIEW" } -> ReviewQueueFilter.NEEDS_REVIEW
+        issueTransactions.any { hasLowConfidence(it) } -> ReviewQueueFilter.LOW_CONFIDENCE
+        issueTransactions.any {
+            it.accountingTreatment in setOf(
+                TransactionTreatments.PERSON_TO_PERSON,
+                TransactionTreatments.TRANSFER,
+                TransactionTreatments.REIMBURSEMENT
+            )
+        } -> ReviewQueueFilter.POSSIBLE_TRANSFERS
+        issueTransactions.any { hasMissingMerchant(it) } -> ReviewQueueFilter.MISSING_MERCHANT
+        issueTransactions.isNotEmpty() -> ReviewQueueFilter.ALL_ISSUES
+        else -> null
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReviewQueueScreen(
     transactions: List<TransactionEntity>,
     onNavigate: (AppScreen) -> Unit,
-    onQuickActions: () -> Unit,
+    onSyncSmsAlerts: () -> Unit,
     onBack: () -> Unit,
     onTransactionSelected: (TransactionEntity) -> Unit
 ) {
     var selectedFilter by remember {
         mutableStateOf<ReviewQueueFilter?>(null)
+    }
+
+    val defaultFilter = remember(transactions) {
+        defaultReviewQueueFilter(transactions)
+    }
+
+    LaunchedEffect(defaultFilter) {
+        if (selectedFilter == null) {
+            selectedFilter = defaultFilter
+        }
     }
 
     val allIssueTransactions = remember(transactions) {
@@ -187,15 +216,21 @@ fun ReviewQueueScreen(
     val merchantCategoryCount = remember(transactions) {
         merchantSummaries(transactions).count { it.uncategorizedCount > 0 }
     }
-    val missingCategoryAmountCents = remember(missingCategoryTransactions) {
-        missingCategoryTransactions.sumOf {
-            TransactionTreatments.spendingImpactCents(
-                treatment = it.accountingTreatment,
-                excludedFromSpending = it.excludedFromSpending,
-                amountCents = it.amountCents
-            )
+    val missingCategoryAmountText = remember(missingCategoryTransactions) {
+        val byCurrency = missingCategoryTransactions
+            .groupBy { it.currency.uppercase(Locale.US) }
+            .mapValues { entry ->
+                entry.value.sumOf {
+                    TransactionTreatments.spendingImpactCents(
+                        treatment = it.accountingTreatment,
+                        excludedFromSpending = it.excludedFromSpending,
+                        amountCents = it.amountCents
+                    )
+                }
         }
+        formatCurrencyTotals(byCurrency)
     }
+
     val selectedListTitle = when (selectedFilter) {
         ReviewQueueFilter.ALL_ISSUES -> "All review items"
         ReviewQueueFilter.NEEDS_REVIEW -> "Transactions need review"
@@ -210,7 +245,7 @@ fun ReviewQueueScreen(
         title = "Review",
         activeScreen = AppScreen.REVIEW_QUEUE,
         onNavigate = onNavigate,
-        onQuickActions = onQuickActions,
+        onSyncSmsAlerts = onSyncSmsAlerts,
         onBack = onBack
     ) { padding ->
         LazyColumn(
@@ -262,7 +297,7 @@ fun ReviewQueueScreen(
                         icon = "C",
                         title = "Uncategorized spending",
                         description = "Spending transactions without a category.",
-                        metric = formatSignedMoney(missingCategoryAmountCents),
+                        metric = missingCategoryAmountText,
                         actionText = "$missingCategoryCount transactions",
                         accentColor = Color(0xFF64A9F5),
                         selected = selectedFilter == ReviewQueueFilter.MISSING_CATEGORY,
@@ -289,7 +324,7 @@ fun ReviewQueueScreen(
             if (allIssueTransactions.isEmpty() && merchantCategoryCount == 0) {
                 item {
                     InlineInfoPanel(
-                        title = "All caught up",
+                        title = "Nothing needs review",
                         body = "There are no review tasks waiting right now."
                     )
                 }
@@ -673,8 +708,6 @@ fun ReviewTransactionCard(
         SimpleDateFormat("MMM dd, yyyy h:mm a", Locale.getDefault())
     }
 
-    val amount = transaction.amountCents / 100.0
-
     val issues = buildList {
         if (transaction.reviewStatus == "NEEDS_REVIEW") add("Needs review")
         if (hasMissingMerchant(transaction)) add("Missing merchant")
@@ -696,66 +729,10 @@ fun ReviewTransactionCard(
             issues.joinToString(", ")
         },
         pillText = treatmentLabel(transaction.accountingTreatment),
-        trailingText = "$${"%.2f".format(amount)}",
+        trailingText = formatMoney(transaction.amountCents, transaction.currency),
         trailingSupportingText = "Fix",
         leadingText = "!",
         onClick = onClick
     )
-    return
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp)
-        ) {
-            Text(
-                text = transaction.displayMerchantName
-                    ?: transaction.merchantRaw
-                    ?: transaction.sourceInstitution
-                    ?: "Unknown merchant",
-                style = MaterialTheme.typography.titleSmall
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "$${"%.2f".format(amount)} • ${treatmentLabel(transaction.accountingTreatment)}",
-                style = MaterialTheme.typography.bodyMedium
-            )
-
-            Text(
-                text = formatter.format(Date(transaction.occurredAtEpochMs)),
-                style = MaterialTheme.typography.labelSmall
-            )
-
-            if (issues.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(4.dp))
-
-                Text(
-                    text = "Issues: ${issues.joinToString(", ")}",
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
-
-            val categoryText = transaction.categoryName.orEmpty()
-
-            if (categoryText.isNotBlank()) {
-                Text(
-                    text = "Category: $categoryText",
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "Tap to fix",
-                style = MaterialTheme.typography.labelSmall
-            )
-        }
-    }
 }
 

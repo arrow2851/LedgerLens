@@ -7,12 +7,19 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.ledgerlens.data.AppDatabase
-import com.example.ledgerlens.domain.parser.detectAndSaveSources
+import com.example.ledgerlens.domain.privacy.RawSmsRetention
+import com.example.ledgerlens.domain.sync.SmsSyncMode
+import com.example.ledgerlens.domain.sync.SmsSyncUseCase
 import com.example.ledgerlens.platform.AndroidSmsImporter
 import com.example.ledgerlens.platform.LedgerLensShareExporter
+import com.example.ledgerlens.platform.SharedPreferencesPrivacySettingsStore
+import com.example.ledgerlens.platform.SharedPreferencesSmsSyncCursorStore
 import com.example.ledgerlens.ui.LedgerLensApp
 import com.example.ledgerlens.ui.theme.LedgerLensTheme
 import kotlinx.coroutines.Dispatchers
@@ -23,16 +30,21 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var database: AppDatabase
     private lateinit var smsImporter: AndroidSmsImporter
+    private lateinit var smsSyncUseCase: SmsSyncUseCase
     private lateinit var shareExporter: LedgerLensShareExporter
+    private lateinit var privacySettingsStore: SharedPreferencesPrivacySettingsStore
 
-    private var pendingSmsImportMode: SmsImportMode = SmsImportMode.REFRESH_LATEST
+    private var pendingSmsImportMode: SmsSyncMode = SmsSyncMode.REFRESH_LATEST
+    private var smsSyncStatusText by mutableStateOf("")
+    private var rawSmsRetention by mutableStateOf(RawSmsRetention.KEEP_FOR_AUDIT)
 
     private val requestSmsPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted) {
                 runSmsImport(pendingSmsImportMode)
             } else {
-                Log.d("LedgerLensSmsImport", "READ_SMS permission denied")
+                smsSyncStatusText =
+                    "SMS permission was denied. LedgerLens needs SMS access to sync alerts on this device."
             }
         }
 
@@ -44,6 +56,14 @@ class MainActivity : ComponentActivity() {
             contentResolver = contentResolver,
             rawAlertDao = database.rawAlertDao()
         )
+        privacySettingsStore = SharedPreferencesPrivacySettingsStore(applicationContext)
+        rawSmsRetention = privacySettingsStore.getRawSmsRetention()
+        smsSyncUseCase = SmsSyncUseCase(
+            database = database,
+            smsImporter = smsImporter,
+            cursorStore = SharedPreferencesSmsSyncCursorStore(applicationContext),
+            privacySettingsStore = privacySettingsStore
+        )
         shareExporter = LedgerLensShareExporter(
             activity = this,
             database = database
@@ -53,24 +73,43 @@ class MainActivity : ComponentActivity() {
             LedgerLensTheme(dynamicColor = false) {
                 LedgerLensApp(
                     database = database,
+                    syncStatusText = smsSyncStatusText,
+                    onSyncSmsAlerts = {
+                        requestSmsImport(SmsSyncMode.REFRESH_LATEST)
+                    },
                     onBackfillSmsHistory = {
-                        requestSmsImport(SmsImportMode.BACKFILL_HISTORY)
+                        requestSmsImport(SmsSyncMode.BACKFILL_HISTORY)
                     },
                     onRefreshLatestSms = {
-                        requestSmsImport(SmsImportMode.REFRESH_LATEST)
+                        requestSmsImport(SmsSyncMode.REFRESH_LATEST)
                     },
                     onExportTransactions = {
                         shareExporter.exportTransactionsCsv()
                     },
-                    onExportParserCorpus = {
-                        shareExporter.exportParserCorpusJsonl()
+                    onExportParserDiagnostics = {
+                        shareExporter.exportParserDiagnosticsJsonl()
+                    },
+                    rawSmsRetention = rawSmsRetention,
+                    onRawSmsRetentionChanged = { retention ->
+                        privacySettingsStore.setRawSmsRetention(retention)
+                        rawSmsRetention = retention
+                        smsSyncStatusText = when (retention) {
+                            RawSmsRetention.KEEP_FOR_AUDIT ->
+                                "LedgerLens will keep original SMS text locally for audit and troubleshooting."
+                            RawSmsRetention.REDACT_AFTER_PARSE ->
+                                "LedgerLens will redact stored original SMS text after successful parsing."
+                        }
+                    },
+                    onDeleteExportedFiles = {
+                        val deleted = shareExporter.deleteExportedFiles()
+                        smsSyncStatusText = "Deleted $deleted exported LedgerLens files from this device."
                     }
                 )
             }
         }
     }
 
-    private fun requestSmsImport(mode: SmsImportMode) {
+    private fun requestSmsImport(mode: SmsSyncMode) {
         pendingSmsImportMode = mode
 
         val permissionStatus = ContextCompat.checkSelfPermission(
@@ -85,33 +124,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun runSmsImport(mode: SmsImportMode) {
+    private fun runSmsImport(mode: SmsSyncMode) {
+        smsSyncStatusText = "Syncing SMS alerts..."
         lifecycleScope.launch {
-            val (importedCount, detectedCount) = withContext(Dispatchers.IO) {
-                val imported = when (mode) {
-                    SmsImportMode.BACKFILL_HISTORY -> {
-                        smsImporter.importFinanceSmsMessages(daysBack = 365 * 5)
-                    }
-                    SmsImportMode.REFRESH_LATEST -> {
-                        smsImporter.importFinanceSmsMessages(daysBack = 90)
-                    }
-                }
-                val detected = detectAndSaveSources(
-                    database = database,
-                    rawAlerts = database.rawAlertDao().getAllOnce()
-                )
-                imported to detected
+            val result = withContext(Dispatchers.IO) {
+                smsSyncUseCase.sync(mode)
             }
 
+            smsSyncStatusText = result.userMessage()
             Log.d(
                 "LedgerLensSmsImport",
-                "mode=$mode importedCount=$importedCount detectedSources=$detectedCount"
+                "mode=$mode scanned=${result.scannedCount} financeLooking=${result.financeLookingCount} imported=${result.importedCount} duplicates=${result.duplicateCount} detectedSources=${result.detectedSourceCount} parsed=${result.parsedCount}"
             )
         }
     }
-}
-
-private enum class SmsImportMode {
-    BACKFILL_HISTORY,
-    REFRESH_LATEST
 }

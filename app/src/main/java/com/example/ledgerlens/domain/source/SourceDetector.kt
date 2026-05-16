@@ -13,9 +13,6 @@ object SourceDetector {
             .filter { it.sourcePackage == "sms" }
             .filter { it.combinedText.isNotBlank() }
 
-        // IMPORTANT:
-        // Top-level source is now ONLY the SMS sender/address.
-        // Institutions, account/card hints, and message types are summaries under that sender.
         val groupedBySender = smsAlerts.groupBy { alert ->
             extractSmsAddress(alert)
         }
@@ -37,10 +34,8 @@ object SourceDetector {
                 .sorted()
 
             val likelyType = inferGroupAccountType(messages)
-
             val institutionSummary = buildInstitutionSummary(institutions)
             val accountHintSummary = buildAccountHintSummary(accountHints)
-
             val confidence = calculateConfidence(
                 institutions = institutions,
                 accountHints = accountHints,
@@ -131,7 +126,6 @@ object SourceDetector {
         suggestedAccountType: String
     ): String {
         val base = institutionSummary ?: "Sender $sourceAddress"
-
         val typeLabel = suggestedAccountType
             .lowercase(Locale.US)
             .replace("_", " ")
@@ -139,10 +133,10 @@ object SourceDetector {
         val hintPart = if (accountHintSummary.isNullOrBlank()) {
             ""
         } else {
-            " • hints $accountHintSummary"
+            " - hints $accountHintSummary"
         }
 
-        return "$base • $typeLabel$hintPart"
+        return "$base - $typeLabel$hintPart"
     }
 
     private fun calculateConfidence(
@@ -151,7 +145,9 @@ object SourceDetector {
         suggestedAccountType: String
     ): Double {
         return when {
-            institutions.isNotEmpty() && accountHints.isNotEmpty() && suggestedAccountType !in setOf("UNKNOWN", "MIXED") -> 0.90
+            institutions.isNotEmpty() &&
+                accountHints.isNotEmpty() &&
+                suggestedAccountType !in setOf("UNKNOWN", "MIXED") -> 0.90
             institutions.isNotEmpty() && accountHints.isNotEmpty() -> 0.82
             institutions.isNotEmpty() && suggestedAccountType !in setOf("UNKNOWN", "MIXED") -> 0.76
             accountHints.isNotEmpty() && suggestedAccountType !in setOf("UNKNOWN", "MIXED") -> 0.72
@@ -180,8 +176,6 @@ object SourceDetector {
         val totalKnown = nonUnknownCounts.values.sum()
         val best = nonUnknownCounts.maxByOrNull { it.value }
 
-        // If one type clearly dominates, use it.
-        // Otherwise mark the sender as mixed.
         if (best != null && best.value.toDouble() / totalKnown.toDouble() >= 0.70) {
             return best.key
         }
@@ -194,25 +188,17 @@ object SourceDetector {
 
         return when {
             lower.contains("savings") -> "SAVINGS"
-
             lower.contains("credit card") ||
-                    lower.contains("available credit") ||
-                    lower.contains("statement balance") ||
-                    lower.contains("minimum payment") ||
-                    lower.contains("payment due") -> {
-                "CREDIT_CARD"
-            }
-
+                lower.contains("available credit") ||
+                lower.contains("statement balance") ||
+                lower.contains("minimum payment") ||
+                lower.contains("payment due") -> "CREDIT_CARD"
             lower.contains("debit card") -> "DEBIT_CARD"
-
             lower.contains("checking") ||
-                    lower.contains("available balance") ||
-                    lower.contains("direct deposit") ||
-                    lower.contains("atm withdrawal") ||
-                    lower.contains("withdrawal") -> {
-                "CHECKING"
-            }
-
+                lower.contains("available balance") ||
+                lower.contains("direct deposit") ||
+                lower.contains("atm withdrawal") ||
+                lower.contains("withdrawal") -> "CHECKING"
             else -> "UNKNOWN"
         }
     }
@@ -232,6 +218,7 @@ object SourceDetector {
             lower.contains("apple card") -> "Apple Card"
             lower.contains("td bank") -> "TD Bank"
             lower.contains("pnc") -> "PNC"
+            lower.contains("hdfc") -> "HDFC Bank"
             else -> null
         }
     }

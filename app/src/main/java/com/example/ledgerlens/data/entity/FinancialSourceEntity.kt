@@ -1,9 +1,15 @@
 package com.example.ledgerlens.data.entity
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "financial_sources")
+@Entity(
+    tableName = "financial_sources",
+    indices = [
+        Index(value = ["userConfirmed", "ignored"])
+    ]
+)
 data class FinancialSourceEntity(
     @PrimaryKey
     val sourceKey: String,

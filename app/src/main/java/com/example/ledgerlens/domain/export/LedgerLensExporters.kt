@@ -62,9 +62,10 @@ fun buildTransactionsCsv(transactions: List<TransactionEntity>): String {
         } + "\n"
 }
 
-fun buildParserCorpusJsonl(
+fun buildParserDiagnosticsJsonl(
     rawAlerts: List<RawAlertEntity>,
-    transactionsByRawAlertId: Map<Long, TransactionEntity>
+    transactionsByRawAlertId: Map<Long, TransactionEntity>,
+    includeRawSmsText: Boolean = false
 ): String {
     return rawAlerts
         .sortedBy { it.postTimeEpochMs }
@@ -84,7 +85,10 @@ fun buildParserCorpusJsonl(
                 append(",")
                 appendJsonField("processingStatus", alert.processingStatus)
                 append(",")
-                appendJsonField("rawSmsText", alert.combinedText)
+                appendJsonField(
+                    "rawSmsText",
+                    if (includeRawSmsText) alert.combinedText else "[redacted]"
+                )
                 append(",")
                 append("\"parsed\":")
                 if (transaction == null) {

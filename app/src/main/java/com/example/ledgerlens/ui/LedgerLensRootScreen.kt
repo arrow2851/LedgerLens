@@ -1,4 +1,4 @@
-﻿package com.example.ledgerlens.ui
+package com.example.ledgerlens.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
@@ -35,6 +35,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -48,6 +49,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
+import androidx.room.withTransaction
 import com.example.ledgerlens.data.AppDatabase
 import com.example.ledgerlens.data.entity.FinancialSourceEntity
 import com.example.ledgerlens.data.entity.RawAlertEntity
@@ -55,11 +57,14 @@ import com.example.ledgerlens.data.entity.TransactionEntity
 import com.example.ledgerlens.data.entity.TransactionRuleEntity
 import com.example.ledgerlens.domain.TransactionTreatments
 import com.example.ledgerlens.domain.merchants.applyMerchantCategoryBulk
+import com.example.ledgerlens.domain.parser.ParseMode
 import com.example.ledgerlens.domain.parser.ParseRunResult
 import com.example.ledgerlens.domain.parser.detectAndSaveSources
 import com.example.ledgerlens.domain.parser.parseIdentifiedSourceTransactions
 import com.example.ledgerlens.domain.parser.reapplySavedRulesToExistingTransactions
 import com.example.ledgerlens.domain.parser.updateRawAlertStatusesForSource
+import com.example.ledgerlens.domain.privacy.RawSmsRetention
+import com.example.ledgerlens.domain.privacy.shouldRedactAfterSuccessfulParse
 import com.example.ledgerlens.domain.rules.MERCHANT_DEFAULT_RULE_SOURCE_KEY
 import com.example.ledgerlens.domain.rules.MerchantAliasApplyResult
 import com.example.ledgerlens.domain.rules.MerchantAliasRuleDraft
@@ -68,7 +73,9 @@ import com.example.ledgerlens.domain.rules.buildMerchantAliasRules
 import com.example.ledgerlens.domain.rules.normalizeAliasText
 import com.example.ledgerlens.domain.rules.normalizeRulePhrase
 import com.example.ledgerlens.domain.rules.previewMerchantAliasRule
+import com.example.ledgerlens.domain.rules.RuleKind
 import com.example.ledgerlens.domain.source.SourceDetector
+import com.example.ledgerlens.domain.source.SourceReviewUseCase
 import com.example.ledgerlens.domain.summary.CategorySpendSummary
 import com.example.ledgerlens.domain.summary.MerchantSummary
 import com.example.ledgerlens.domain.summary.categorySpendSummaries
@@ -86,6 +93,7 @@ import com.example.ledgerlens.domain.summary.isVirtualUncategorizedCategory
 import com.example.ledgerlens.domain.summary.merchantSummaries
 import com.example.ledgerlens.domain.summary.merchantSummaryName
 import com.example.ledgerlens.domain.summary.treatmentLabel
+import com.example.ledgerlens.domain.transactions.TransactionCorrectionUseCase
 import com.example.ledgerlens.ui.components.CategoryBarRow
 import com.example.ledgerlens.ui.components.FinanceHeroCard
 import com.example.ledgerlens.ui.components.InlineInfoPanel
@@ -96,8 +104,6 @@ import com.example.ledgerlens.ui.components.ListSectionHeader
 import com.example.ledgerlens.ui.components.MetricPanel
 import com.example.ledgerlens.ui.components.MetricTile
 import com.example.ledgerlens.ui.components.MiniTrendStrip
-import com.example.ledgerlens.ui.components.QuickActionItem
-import com.example.ledgerlens.ui.components.QuickActionSheet
 import com.example.ledgerlens.ui.components.StatStrip
 import com.example.ledgerlens.ui.components.StatStripItem
 import com.example.ledgerlens.ui.components.TreatmentChip
@@ -188,12 +194,17 @@ fun buildMerchantAliasDraftForRule(rule: TransactionRuleEntity): MerchantAliasRu
 }
 
 @Composable
-fun LedgerLensSourceSetupApp(
+fun LedgerLensAppRoot(
     database: AppDatabase,
+    syncStatusText: String,
+    onSyncSmsAlerts: () -> Unit,
     onBackfillSmsHistory: () -> Unit,
     onRefreshLatestSms: () -> Unit,
     onExportTransactions: () -> Unit,
-    onExportParserCorpus: () -> Unit
+    onExportParserDiagnostics: () -> Unit,
+    rawSmsRetention: RawSmsRetention,
+    onRawSmsRetentionChanged: (RawSmsRetention) -> Unit,
+    onDeleteExportedFiles: () -> Unit
 ) {
     val rawAlerts by database
         .rawAlertDao()
@@ -236,9 +247,21 @@ fun LedgerLensSourceSetupApp(
         .collectAsState(initial = emptyList())
 
     val scope = rememberCoroutineScope()
+    val sourceReviewUseCase = remember(database) {
+        SourceReviewUseCase(database)
+    }
+    val transactionCorrectionUseCase = remember(database) {
+        TransactionCorrectionUseCase(database)
+    }
 
     var statusText by remember {
         mutableStateOf("Import SMS, detect sources, then review uncategorized possible sources.")
+    }
+
+    LaunchedEffect(syncStatusText) {
+        if (syncStatusText.isNotBlank()) {
+            statusText = syncStatusText
+        }
     }
 
     var selectedSource by remember {
@@ -257,16 +280,12 @@ fun LedgerLensSourceSetupApp(
         mutableStateOf<MerchantSummary?>(null)
     }
 
-    var showQuickActions by remember {
-        mutableStateOf(false)
-    }
-
     var parserRuleEditorRequest by remember {
         mutableStateOf<ParserRuleEditorRequest?>(null)
     }
 
     val backAction = resolveLedgerBackAction(
-        showSheet = showQuickActions || parserRuleEditorRequest != null,
+        showSheet = parserRuleEditorRequest != null,
         hasSelectedTransaction = selectedTransaction != null,
         hasSelectedSource = selectedSource != null,
         hasSelectedMerchant = selectedMerchant != null,
@@ -276,13 +295,13 @@ fun LedgerLensSourceSetupApp(
     BackHandler(enabled = backAction != LedgerBackAction.EXIT_APP) {
         when (backAction) {
             LedgerBackAction.DISMISS_SHEET -> {
-                showQuickActions = false
                 parserRuleEditorRequest = null
             }
             LedgerBackAction.CLOSE_TRANSACTION_DETAIL -> selectedTransaction = null
             LedgerBackAction.CLOSE_SOURCE_DETAIL -> selectedSource = null
             LedgerBackAction.CLOSE_MERCHANT_DETAIL -> selectedMerchant = null
             LedgerBackAction.GO_REVIEW -> activeScreen = AppScreen.REVIEW_QUEUE
+            LedgerBackAction.GO_MORE -> activeScreen = AppScreen.TOOLS
             LedgerBackAction.GO_SPENDING -> activeScreen = AppScreen.SUMMARY
             LedgerBackAction.EXIT_APP -> Unit
         }
@@ -308,166 +327,6 @@ fun LedgerLensSourceSetupApp(
         transactions.count { hasAnyReviewIssue(it) }
     }
 
-    val currentMonthExpenses = remember(transactions) {
-        val monthStart = getCurrentMonthStartEpochMs()
-        val monthEnd = getNextMonthStartEpochMs(monthStart)
-
-        transactions
-            .filter {
-                TransactionTreatments.isInSpendingView(
-                    treatment = it.accountingTreatment,
-                    excludedFromSpending = it.excludedFromSpending
-                )
-            }
-            .filter {
-                it.occurredAtEpochMs >= monthStart &&
-                        it.occurredAtEpochMs < monthEnd
-            }
-    }
-
-    val currentMonthSpendingCents = remember(currentMonthExpenses) {
-        currentMonthExpenses.sumOf {
-            TransactionTreatments.spendingImpactCents(
-                treatment = it.accountingTreatment,
-                excludedFromSpending = it.excludedFromSpending,
-                amountCents = it.amountCents
-            )
-        }
-    }
-
-    val currentMonthGrossExpenseCents = remember(currentMonthExpenses) {
-        currentMonthExpenses
-            .filter { it.accountingTreatment == TransactionTreatments.EXPENSE }
-            .sumOf { it.amountCents }
-    }
-
-    val currentMonthCategorySummaries = remember(currentMonthExpenses) {
-        categorySpendSummaries(currentMonthExpenses).take(4)
-    }
-
-    val currentMonthActivity = remember(transactions) {
-        val monthStart = getCurrentMonthStartEpochMs()
-        val monthEnd = getNextMonthStartEpochMs(monthStart)
-
-        transactions.filter {
-            it.occurredAtEpochMs >= monthStart &&
-                    it.occurredAtEpochMs < monthEnd
-        }
-    }
-
-    val currentMonthIncomeCents = remember(currentMonthActivity) {
-        currentMonthActivity
-            .filter { it.accountingTreatment == TransactionTreatments.INCOME }
-            .sumOf { it.amountCents }
-    }
-
-    val currentMonthRefundCents = remember(currentMonthActivity) {
-        currentMonthActivity
-            .filter { it.accountingTreatment == TransactionTreatments.REFUND }
-            .sumOf { it.amountCents }
-    }
-
-    val currentMonthReimbursementCents = remember(currentMonthActivity) {
-        currentMonthActivity
-            .filter { it.accountingTreatment == TransactionTreatments.REIMBURSEMENT }
-            .sumOf { it.amountCents }
-    }
-
-    val currentMonthMovementCents = remember(currentMonthActivity) {
-        currentMonthActivity
-            .filter {
-                it.accountingTreatment in setOf(
-                    TransactionTreatments.CREDIT_CARD_PAYMENT,
-                    TransactionTreatments.TRANSFER,
-                    TransactionTreatments.PERSON_TO_PERSON
-                )
-            }
-            .sumOf { it.amountCents }
-    }
-
-    val previousMonthSpendingCents = remember(transactions) {
-        val currentMonthStart = getCurrentMonthStartEpochMs()
-        val previousMonthStart = getPreviousMonthStartEpochMs(currentMonthStart)
-
-        transactions
-            .filter {
-                TransactionTreatments.isInSpendingView(
-                    treatment = it.accountingTreatment,
-                    excludedFromSpending = it.excludedFromSpending
-                )
-            }
-            .filter {
-                it.occurredAtEpochMs >= previousMonthStart &&
-                        it.occurredAtEpochMs < currentMonthStart
-            }
-            .sumOf {
-                TransactionTreatments.spendingImpactCents(
-                    treatment = it.accountingTreatment,
-                    excludedFromSpending = it.excludedFromSpending,
-                    amountCents = it.amountCents
-                )
-            }
-    }
-
-    val topCategoryLabel = remember(currentMonthExpenses) {
-        currentMonthExpenses
-            .groupBy { displayCategoryName(it.categoryName) }
-            .maxByOrNull { entry ->
-                kotlin.math.abs(
-                    entry.value.sumOf {
-                        TransactionTreatments.spendingImpactCents(
-                            treatment = it.accountingTreatment,
-                            excludedFromSpending = it.excludedFromSpending,
-                            amountCents = it.amountCents
-                        )
-                    }
-                )
-            }
-            ?.let { entry ->
-                val impact = entry.value.sumOf {
-                    TransactionTreatments.spendingImpactCents(
-                        treatment = it.accountingTreatment,
-                        excludedFromSpending = it.excludedFromSpending,
-                        amountCents = it.amountCents
-                    )
-                }
-                "${entry.key} - ${formatSignedMoney(impact)}"
-            }
-            ?: "No spending yet"
-    }
-
-    val topMerchantLabel = remember(currentMonthExpenses) {
-        currentMonthExpenses
-            .groupBy {
-                it.spendingMerchantName?.takeIf { merchant -> merchant.isNotBlank() }
-                    ?: it.displayMerchantName
-                    ?: it.merchantRaw
-                    ?: "Unknown merchant"
-            }
-            .maxByOrNull { entry ->
-                kotlin.math.abs(
-                    entry.value.sumOf {
-                        TransactionTreatments.spendingImpactCents(
-                            treatment = it.accountingTreatment,
-                            excludedFromSpending = it.excludedFromSpending,
-                            amountCents = it.amountCents
-                        )
-                    }
-                )
-            }
-            ?.let { entry ->
-                val impact = entry.value.sumOf {
-                    TransactionTreatments.spendingImpactCents(
-                        treatment = it.accountingTreatment,
-                        excludedFromSpending = it.excludedFromSpending,
-                        amountCents = it.amountCents
-                    )
-                }
-                "${entry.key} - ${formatSignedMoney(impact)}"
-            }
-            ?: "No merchant yet"
-    }
-
     suspend fun detectAndSaveSources(): Int {
         return detectAndSaveSources(
             database = database,
@@ -479,13 +338,11 @@ fun LedgerLensSourceSetupApp(
         source: FinancialSourceEntity,
         accountType: String
     ): ParseRunResult {
-        database.financialSourceDao().confirmAccountType(
-            sourceKey = source.sourceKey,
+        return sourceReviewUseCase.useSender(
+            source = source,
             accountType = accountType,
-            updatedAtEpochMs = System.currentTimeMillis()
+            redactRawSmsAfterParse = rawSmsRetention.shouldRedactAfterSuccessfulParse()
         )
-
-        return parseIdentifiedSourceTransactions(database)
     }
 
     suspend fun saveMergedRule(
@@ -516,6 +373,15 @@ fun LedgerLensSourceSetupApp(
                 sourceKey = sourceKey,
                 matchPhrase = cleanedPhrase,
                 normalizedMatchPhrase = normalized,
+                ruleKind = if (sourceKey == MERCHANT_DEFAULT_RULE_SOURCE_KEY) {
+                    RuleKind.MERCHANT_DEFAULT
+                } else if (transactionType != null && merchantName == null && categoryName == null) {
+                    RuleKind.TREATMENT_OVERRIDE
+                } else if (categoryName != null && merchantName == null) {
+                    RuleKind.CATEGORY_OVERRIDE
+                } else {
+                    RuleKind.SOURCE_ALIAS
+                },
                 merchantName = merchantName,
                 categoryName = categoryName,
                 transactionType = transactionType,
@@ -531,6 +397,11 @@ fun LedgerLensSourceSetupApp(
         } else {
             existing.copy(
                 matchPhrase = cleanedPhrase,
+                ruleKind = if (sourceKey == MERCHANT_DEFAULT_RULE_SOURCE_KEY) {
+                    RuleKind.MERCHANT_DEFAULT
+                } else {
+                    existing.ruleKind
+                },
                 merchantName = merchantName ?: existing.merchantName,
                 categoryName = categoryName ?: existing.categoryName,
                 transactionType = transactionType ?: existing.transactionType,
@@ -607,95 +478,6 @@ fun LedgerLensSourceSetupApp(
         )
     }
 
-    if (showQuickActions) {
-        QuickActionSheet(
-            actions = listOf(
-                QuickActionItem(
-                    title = "Refresh latest SMS",
-                    supportingText = "Import new SMS alerts without duplicating existing ones.",
-                    onClick = {
-                        statusText = "Refreshing latest SMS..."
-                        onRefreshLatestSms()
-                    }
-                ),
-                QuickActionItem(
-                    title = "Backfill SMS history",
-                    supportingText = "Import older financial-looking SMS alerts.",
-                    onClick = {
-                        statusText = "Running SMS backfill..."
-                        onBackfillSmsHistory()
-                    }
-                ),
-                QuickActionItem(
-                    title = "Detect sources",
-                    supportingText = "Find sender-level financial sources from imported SMS.",
-                    onClick = {
-                        statusText = "Detecting SMS sources..."
-                        scope.launch(Dispatchers.IO) {
-                            val detectedCount = detectAndSaveSources()
-                            withContext(Dispatchers.Main) {
-                                statusText = "Detected $detectedCount possible SMS sources."
-                            }
-                        }
-                    }
-                ),
-                QuickActionItem(
-                    title = "Parse identified sources",
-                    supportingText = "Build transactions from sources you already approved.",
-                    onClick = {
-                        statusText = "Parsing transactions from identified sources..."
-                        scope.launch(Dispatchers.IO) {
-                            val result = parseIdentifiedSourceTransactions(database)
-                            withContext(Dispatchers.Main) {
-                                statusText =
-                                    "Matched ${result.matchedAlertCount} SMS from identified sources. Parsed ${result.parsedCount}, skipped existing ${result.skippedCount}, ignored ${result.ignoredNonTransactionCount}, failed ${result.failedCount}."
-                            }
-                        }
-                    }
-                ),
-                QuickActionItem(
-                    title = "Reapply saved rules",
-                    supportingText = "Apply merchant defaults and phrase rules to existing transactions.",
-                    onClick = {
-                        statusText = "Reapplying saved rules to existing transactions..."
-                        scope.launch(Dispatchers.IO) {
-                            val updatedCount = reapplySavedRulesToExistingTransactions(database)
-                            withContext(Dispatchers.Main) {
-                                statusText = "Reapplied saved rules to $updatedCount existing transactions."
-                            }
-                        }
-                    }
-                ),
-                QuickActionItem(
-                    title = "Export transactions",
-                    supportingText = "Share a CSV of parsed transaction data.",
-                    onClick = {
-                        statusText = "Opening transaction export..."
-                        onExportTransactions()
-                    }
-                ),
-                QuickActionItem(
-                    title = "Export parser corpus",
-                    supportingText = "Share local JSONL examples for parser tuning.",
-                    onClick = {
-                        statusText = "Opening parser corpus export..."
-                        onExportParserCorpus()
-                    }
-                ),
-                QuickActionItem(
-                    title = "Tools and settings",
-                    supportingText = "Open maintenance actions, sources, and rules.",
-                    onClick = {
-                        activeScreen = AppScreen.TOOLS
-                    }
-                )
-            ),
-            onDismiss = {
-                showQuickActions = false
-            }
-        )
-    }
-
     parserRuleEditorRequest?.let { request ->
         ParserRuleEditorSheet(
             title = request.title,
@@ -737,172 +519,80 @@ fun LedgerLensSourceSetupApp(
                 selectedSource = null
             },
             onMarkSourceType = { accountType ->
+                val source = selectedSource ?: return@SourceDetailScreen
                 scope.launch(Dispatchers.IO) {
-                    val result = confirmSourceAndParse(selectedSource!!, accountType)
+                    val result = confirmSourceAndParse(source, accountType)
 
                     withContext(Dispatchers.Main) {
-                        statusText = "Marked source as $accountType and parsed ${result.parsedCount} new transactions."
+                        statusText = "LedgerLens will use this sender. Parsed ${result.parsedCount} new transactions."
                         selectedSource = null
                     }
                 }
             },
             onDismissAsNonSource = {
+                val source = selectedSource ?: return@SourceDetailScreen
                 scope.launch(Dispatchers.IO) {
-                    val source = selectedSource!!
-                    val sourceKey = source.sourceKey
-
-                    database.financialSourceDao().ignoreSource(
-                        sourceKey = sourceKey,
-                        updatedAtEpochMs = System.currentTimeMillis()
-                    )
-                    val deletedTransactions = database.transactionDao()
-                        .deleteBySourceKey(sourceKey)
-                    updateRawAlertStatusesForSource(
-                        database = database,
-                        source = source,
-                        status = "IGNORED_SOURCE"
-                    )
+                    val existingTransactions = sourceReviewUseCase.ignoreSender(source)
 
                     withContext(Dispatchers.Main) {
-                        statusText = "Dismissed source as non-source and removed $deletedTransactions parsed transactions."
+                        statusText = "Ignored future alerts from this sender. Existing parsed transactions were kept ($existingTransactions)."
                         selectedSource = null
                     }
                 }
             },
             onMoveToUncategorized = {
+                val source = selectedSource ?: return@SourceDetailScreen
                 scope.launch(Dispatchers.IO) {
-                    val source = selectedSource!!
-                    val sourceKey = source.sourceKey
-
-                    database.financialSourceDao().resetSourceConfirmation(
-                        sourceKey = sourceKey,
-                        updatedAtEpochMs = System.currentTimeMillis()
-                    )
-                    val deletedTransactions = database.transactionDao()
-                        .deleteBySourceKey(sourceKey)
-                    updateRawAlertStatusesForSource(
-                        database = database,
-                        source = source,
-                        status = "IMPORTED_SMS"
-                    )
+                    val existingTransactions = sourceReviewUseCase.moveSenderBackToReview(source)
 
                     withContext(Dispatchers.Main) {
-                        statusText = "Moved source back to uncategorized and removed $deletedTransactions parsed transactions."
+                        statusText = "Moved sender back to review. Existing parsed transactions were kept ($existingTransactions)."
                         selectedSource = null
                     }
                 }
             }
         )
     } else if (selectedTransaction != null) {
+        val transactionForDetail = selectedTransaction ?: return
         val matchingRawAlert = rawAlerts.firstOrNull {
-            it.id == selectedTransaction!!.rawAlertId
+            it.id == transactionForDetail.rawAlertId
         }
 
         TransactionDetailScreen(
-            transaction = selectedTransaction!!,
+            transaction = transactionForDetail,
             rawAlert = matchingRawAlert,
             allTransactions = transactions,
             onBack = {
                 selectedTransaction = null
             },
-            onUpdateTransactionType = { transactionType, excludedFromSpending ->
+            onSaveTransactionDraft = { draft, onComplete ->
+                val transactionId = transactionForDetail.id
                 scope.launch(Dispatchers.IO) {
-                    database.transactionDao().updateTransactionType(
-                        transactionId = selectedTransaction!!.id,
-                        transactionType = transactionType,
-                        excludedFromSpending = excludedFromSpending,
-                        updatedAtEpochMs = System.currentTimeMillis()
-                    )
-
-                    withContext(Dispatchers.Main) {
-                        selectedTransaction = selectedTransaction!!.copy(
-                            transactionType = transactionType,
-                            accountingTreatment = transactionType,
-                            excludedFromSpending = excludedFromSpending,
-                            treatmentUserEdited = true,
-                            updatedAtEpochMs = System.currentTimeMillis()
+                    runCatching {
+                        transactionCorrectionUseCase.updateTransactionFromUserEdit(
+                            transactionId = transactionId,
+                            draft = draft
                         )
-                    }
-                }
-            },
-            onUpdateReviewStatus = { reviewStatus ->
-                scope.launch(Dispatchers.IO) {
-                    database.transactionDao().updateReviewStatus(
-                        transactionId = selectedTransaction!!.id,
-                        reviewStatus = reviewStatus,
-                        updatedAtEpochMs = System.currentTimeMillis()
+                    }.fold(
+                        onSuccess = { updated ->
+                            withContext(Dispatchers.Main) {
+                                if (updated != null) {
+                                    selectedTransaction = updated
+                                }
+                                onComplete(null)
+                            }
+                        },
+                        onFailure = { error ->
+                            withContext(Dispatchers.Main) {
+                                onComplete(error)
+                            }
+                        }
                     )
-
-                    withContext(Dispatchers.Main) {
-                        selectedTransaction = selectedTransaction!!.copy(
-                            reviewStatus = reviewStatus,
-                            updatedAtEpochMs = System.currentTimeMillis()
-                        )
-                    }
-                }
-            },
-            onUpdateExcludedFromSpending = { excluded ->
-                scope.launch(Dispatchers.IO) {
-                    database.transactionDao().updateExcludedFromSpending(
-                        transactionId = selectedTransaction!!.id,
-                        excludedFromSpending = excluded,
-                        updatedAtEpochMs = System.currentTimeMillis()
-                    )
-
-                    withContext(Dispatchers.Main) {
-                        selectedTransaction = selectedTransaction!!.copy(
-                            excludedFromSpending = excluded,
-                            treatmentUserEdited = true,
-                            updatedAtEpochMs = System.currentTimeMillis()
-                        )
-                    }
-                }
-            },
-            onUpdateMerchant = { merchantName ->
-                scope.launch(Dispatchers.IO) {
-                    val cleanedMerchant = merchantName.trim().ifBlank { null }
-
-                    database.transactionDao().updateMerchant(
-                        transactionId = selectedTransaction!!.id,
-                        merchantRaw = cleanedMerchant,
-                        displayMerchantName = cleanedMerchant,
-                        updatedAtEpochMs = System.currentTimeMillis()
-                    )
-
-                    withContext(Dispatchers.Main) {
-                        selectedTransaction = selectedTransaction!!.copy(
-                            merchantRaw = cleanedMerchant,
-                            displayMerchantName = cleanedMerchant,
-                            merchantUserEdited = true,
-                            updatedAtEpochMs = System.currentTimeMillis()
-                        )
-                    }
-                }
-            },
-            onUpdateSpendingAttribution = { category, spendingMerchant ->
-                scope.launch(Dispatchers.IO) {
-                    val cleanedCategory = category.trim().ifBlank { null }
-                    val cleanedSpendingMerchant = spendingMerchant.trim().ifBlank { null }
-                    val updatedAt = System.currentTimeMillis()
-
-                    database.transactionDao().updateSpendingAttribution(
-                        transactionId = selectedTransaction!!.id,
-                        categoryName = cleanedCategory,
-                        spendingMerchantName = cleanedSpendingMerchant,
-                        updatedAtEpochMs = updatedAt
-                    )
-
-                    withContext(Dispatchers.Main) {
-                        selectedTransaction = selectedTransaction!!.copy(
-                            categoryName = cleanedCategory,
-                            spendingMerchantName = cleanedSpendingMerchant,
-                            categoryUserEdited = true,
-                            updatedAtEpochMs = updatedAt
-                        )
-                    }
                 }
             },
             onApplyMerchantToSimilar = { matchPhrase, merchantName, onComplete ->
+                val sourceKey = transactionForDetail.sourceKey
+                val currentTransactionId = transactionForDetail.id
                 scope.launch(Dispatchers.IO) {
                     val cleanedPhrase = matchPhrase.trim()
                     val cleanedMerchant = merchantName.trim().ifBlank { null }
@@ -915,31 +605,36 @@ fun LedgerLensSourceSetupApp(
                     }
 
                     saveMergedRule(
-                        sourceKey = selectedTransaction!!.sourceKey,
+                        sourceKey = sourceKey,
                         matchPhrase = cleanedPhrase,
                         merchantName = cleanedMerchant
                     )
 
                     val updatedCount = database.transactionDao().updateMerchantForSimilarRawText(
-                        sourceKey = selectedTransaction!!.sourceKey,
+                        sourceKey = sourceKey,
                         likePattern = "%$cleanedPhrase%",
                         merchantName = cleanedMerchant,
                         updatedAtEpochMs = System.currentTimeMillis()
                     )
 
                     withContext(Dispatchers.Main) {
-                        selectedTransaction = selectedTransaction!!.copy(
-                            merchantRaw = cleanedMerchant,
-                            displayMerchantName = cleanedMerchant,
-                            merchantUserEdited = true,
-                            updatedAtEpochMs = System.currentTimeMillis()
-                        )
+                        selectedTransaction = database.transactionDao().getById(currentTransactionId)
+                            ?: transactionForDetail.copy(
+                                merchantRaw = cleanedMerchant,
+                                displayMerchantName = cleanedMerchant,
+                                merchantUserEdited = true,
+                                updatedAtEpochMs = System.currentTimeMillis()
+                            )
 
                         onComplete(updatedCount)
                     }
                 }
             },
             onApplyCurrentClassificationToSimilar = { matchPhrase, onComplete ->
+                val sourceKey = transactionForDetail.sourceKey
+                val transactionType = transactionForDetail.transactionType
+                val reviewStatus = transactionForDetail.reviewStatus
+                val excludedFromSpending = transactionForDetail.excludedFromSpending
                 scope.launch(Dispatchers.IO) {
                     val cleanedPhrase = matchPhrase.trim()
 
@@ -951,19 +646,19 @@ fun LedgerLensSourceSetupApp(
                     }
 
                     saveMergedRule(
-                        sourceKey = selectedTransaction!!.sourceKey,
+                        sourceKey = sourceKey,
                         matchPhrase = cleanedPhrase,
-                        transactionType = selectedTransaction!!.transactionType,
-                        reviewStatus = selectedTransaction!!.reviewStatus,
-                        excludedFromSpending = selectedTransaction!!.excludedFromSpending
+                        transactionType = transactionType,
+                        reviewStatus = reviewStatus,
+                        excludedFromSpending = excludedFromSpending
                     )
 
                     val updatedCount = database.transactionDao().updateClassificationForSimilarRawText(
-                        sourceKey = selectedTransaction!!.sourceKey,
+                        sourceKey = sourceKey,
                         likePattern = "%$cleanedPhrase%",
-                        transactionType = selectedTransaction!!.transactionType,
-                        reviewStatus = selectedTransaction!!.reviewStatus,
-                        excludedFromSpending = selectedTransaction!!.excludedFromSpending,
+                        transactionType = transactionType,
+                        reviewStatus = reviewStatus,
+                        excludedFromSpending = excludedFromSpending,
                         updatedAtEpochMs = System.currentTimeMillis()
                     )
 
@@ -973,6 +668,8 @@ fun LedgerLensSourceSetupApp(
                 }
             },
             onApplyCategoryToSimilar = { matchPhrase, category, onComplete ->
+                val sourceKey = transactionForDetail.sourceKey
+                val currentTransactionId = transactionForDetail.id
                 scope.launch(Dispatchers.IO) {
                     val cleanedPhrase = matchPhrase.trim()
                     val cleanedCategory = category.trim().ifBlank { null }
@@ -985,24 +682,25 @@ fun LedgerLensSourceSetupApp(
                     }
 
                     saveMergedRule(
-                        sourceKey = selectedTransaction!!.sourceKey,
+                        sourceKey = sourceKey,
                         matchPhrase = cleanedPhrase,
                         categoryName = cleanedCategory
                     )
 
                     val updatedCount = database.transactionDao().updateCategoryForSimilarRawText(
-                        sourceKey = selectedTransaction!!.sourceKey,
+                        sourceKey = sourceKey,
                         likePattern = "%$cleanedPhrase%",
                         categoryName = cleanedCategory,
                         updatedAtEpochMs = System.currentTimeMillis()
                     )
 
                     withContext(Dispatchers.Main) {
-                        selectedTransaction = selectedTransaction!!.copy(
-                            categoryName = cleanedCategory,
-                            categoryUserEdited = true,
-                            updatedAtEpochMs = System.currentTimeMillis()
-                        )
+                        selectedTransaction = database.transactionDao().getById(currentTransactionId)
+                            ?: transactionForDetail.copy(
+                                categoryName = cleanedCategory,
+                                categoryUserEdited = true,
+                                updatedAtEpochMs = System.currentTimeMillis()
+                            )
 
                         onComplete(updatedCount)
                     }
@@ -1018,11 +716,16 @@ fun LedgerLensSourceSetupApp(
     } else if (activeScreen == AppScreen.SUMMARY) {
         SpendingSummaryScreen(
             transactions = transactions,
+            rawAlertCount = rawAlertCount,
+            pendingSourceReviewCount = uncategorizedSourceCount,
+            approvedSourceCount = identifiedSourceCount,
+            reviewIssueCount = reviewIssueCount,
             onNavigate = { screen ->
                 activeScreen = screen
             },
-            onQuickActions = {
-                showQuickActions = true
+            onSyncSmsAlerts = {
+                statusText = "Syncing SMS alerts..."
+                onSyncSmsAlerts()
             },
             onBack = {
                 activeScreen = AppScreen.SUMMARY
@@ -1039,8 +742,9 @@ fun LedgerLensSourceSetupApp(
             onNavigate = { screen ->
                 activeScreen = screen
             },
-            onQuickActions = {
-                showQuickActions = true
+            onSyncSmsAlerts = {
+                statusText = "Syncing SMS alerts..."
+                onSyncSmsAlerts()
             },
             onBack = {
                 activeScreen = AppScreen.SUMMARY
@@ -1058,8 +762,9 @@ fun LedgerLensSourceSetupApp(
             onNavigate = { screen ->
                 activeScreen = screen
             },
-            onQuickActions = {
-                showQuickActions = true
+            onSyncSmsAlerts = {
+                statusText = "Syncing SMS alerts..."
+                onSyncSmsAlerts()
             },
             onBack = {
                 activeScreen = AppScreen.SUMMARY
@@ -1105,14 +810,16 @@ fun LedgerLensSourceSetupApp(
             }
         )
     } else if (selectedMerchant != null) {
+        val merchantForDetail = selectedMerchant ?: return
         val merchantTransactions = transactions
             .filter {
-                merchantSummaryName(it).equals(selectedMerchant!!.merchantName, ignoreCase = true)
+                merchantSummaryName(it).equals(merchantForDetail.merchantName, ignoreCase = true) &&
+                    it.currency.equals(merchantForDetail.currency, ignoreCase = true)
             }
             .sortedByDescending { it.occurredAtEpochMs }
 
         MerchantDetailScreen(
-            merchant = selectedMerchant!!,
+            merchant = merchantForDetail,
             transactions = merchantTransactions,
             allTransactions = transactions,
             rawAlerts = rawAlerts,
@@ -1123,20 +830,20 @@ fun LedgerLensSourceSetupApp(
                 scope.launch(Dispatchers.IO) {
                     val cleanedCategory = category.trim().ifBlank { null }
                     val cleanedTreatment = treatment.trim().ifBlank {
-                        selectedMerchant!!.primaryTreatment
+                        merchantForDetail.primaryTreatment
                     }
                     val now = System.currentTimeMillis()
 
                     if (applyCategoryAutomatically) {
                         database.transactionDao().updateCategoryForMerchantName(
-                            merchantName = selectedMerchant!!.merchantName,
+                            merchantName = merchantForDetail.merchantName,
                             categoryName = cleanedCategory,
                             updatedAtEpochMs = now
                         )
                     }
 
                     database.transactionDao().updateTreatmentForMerchantName(
-                        merchantName = selectedMerchant!!.merchantName,
+                        merchantName = merchantForDetail.merchantName,
                         accountingTreatment = cleanedTreatment,
                         excludedFromSpending = TransactionTreatments.defaultExcludedFromSpending(cleanedTreatment),
                         updatedAtEpochMs = now
@@ -1144,28 +851,27 @@ fun LedgerLensSourceSetupApp(
 
                     saveMergedRule(
                         sourceKey = MERCHANT_DEFAULT_RULE_SOURCE_KEY,
-                        matchPhrase = selectedMerchant!!.merchantName,
-                        merchantName = selectedMerchant!!.merchantName,
+                        matchPhrase = merchantForDetail.merchantName,
+                        merchantName = merchantForDetail.merchantName,
                         categoryName = cleanedCategory,
                         transactionType = cleanedTreatment,
                         excludedFromSpending = TransactionTreatments.defaultExcludedFromSpending(cleanedTreatment),
-                        appliesToTreatment = cleanedTreatment,
                         applyCategoryAutomatically = applyCategoryAutomatically,
                         requiresReview = requiresReview
                     )
 
                     withContext(Dispatchers.Main) {
-                        selectedMerchant = selectedMerchant!!.copy(
+                        selectedMerchant = merchantForDetail.copy(
                             primaryTreatment = cleanedTreatment,
                             categoryName = cleanedCategory,
-                            uncategorizedCount = if (applyCategoryAutomatically) 0 else selectedMerchant!!.uncategorizedCount
+                            uncategorizedCount = if (applyCategoryAutomatically) 0 else merchantForDetail.uncategorizedCount
                         )
                     }
                 }
             },
             onRenameMerchantGroup = { newName ->
                 scope.launch(Dispatchers.IO) {
-                    val oldName = selectedMerchant!!.merchantName
+                    val oldName = merchantForDetail.merchantName
                     val cleanedName = newName.trim().ifBlank { oldName }
                     var updatedCount = 0
                     database.transactionDao()
@@ -1197,7 +903,7 @@ fun LedgerLensSourceSetupApp(
                         }
 
                     withContext(Dispatchers.Main) {
-                        selectedMerchant = selectedMerchant!!.copy(merchantName = cleanedName)
+                        selectedMerchant = merchantForDetail.copy(merchantName = cleanedName)
                         statusText = "Renamed $updatedCount existing transactions to $cleanedName without creating a parser rule."
                     }
                 }
@@ -1247,8 +953,9 @@ fun LedgerLensSourceSetupApp(
             onNavigate = { screen ->
                 activeScreen = screen
             },
-            onQuickActions = {
-                showQuickActions = true
+            onSyncSmsAlerts = {
+                statusText = "Syncing SMS alerts..."
+                onSyncSmsAlerts()
             },
             onBack = {
                 activeScreen = AppScreen.SUMMARY
@@ -1285,7 +992,11 @@ fun LedgerLensSourceSetupApp(
                 statusText = "Parsing transactions from identified sources..."
 
                 scope.launch(Dispatchers.IO) {
-                    val result = parseIdentifiedSourceTransactions(database)
+                    val result = parseIdentifiedSourceTransactions(
+                        database = database,
+                        mode = ParseMode.NEW_PENDING_ONLY,
+                        redactRawSmsAfterParse = rawSmsRetention.shouldRedactAfterSuccessfulParse()
+                    )
 
                     withContext(Dispatchers.Main) {
                         statusText =
@@ -1297,12 +1008,18 @@ fun LedgerLensSourceSetupApp(
                 statusText = "Reparsing transactions from identified sources..."
 
                 scope.launch(Dispatchers.IO) {
-                    database.transactionDao().deleteAll()
-                    val result = parseIdentifiedSourceTransactions(database)
+                    var result = ParseRunResult()
+                    database.withTransaction {
+                        result = parseIdentifiedSourceTransactions(
+                            database = database,
+                            mode = ParseMode.REPARSE_ALL_APPROVED,
+                            redactRawSmsAfterParse = rawSmsRetention.shouldRedactAfterSuccessfulParse()
+                        )
+                    }
 
                     withContext(Dispatchers.Main) {
                         statusText =
-                            "Reparsed from ${result.matchedAlertCount} SMS. Parsed ${result.parsedCount}, ignored ${result.ignoredNonTransactionCount}, failed ${result.failedCount}."
+                            "Reprocessed ${result.matchedAlertCount} SMS. Created ${result.parsedCount}, updated ${result.changedCount}, unchanged ${result.unchangedCount}, ignored ${result.ignoredNonTransactionCount}, failed ${result.failedCount}."
                     }
                 }
             },
@@ -1310,10 +1027,10 @@ fun LedgerLensSourceSetupApp(
                 statusText = "Reapplying saved rules to existing transactions..."
 
                 scope.launch(Dispatchers.IO) {
-                    val updatedCount = reapplySavedRulesToExistingTransactions(database)
+                    val result = reapplySavedRulesToExistingTransactions(database)
 
                     withContext(Dispatchers.Main) {
-                        statusText = "Reapplied saved rules to $updatedCount existing transactions."
+                        statusText = "Reapplied saved rules: scanned ${result.scanned}, changed ${result.changed}, unchanged ${result.unchanged}, skipped ${result.skipped}."
                     }
                 }
             },
@@ -1321,19 +1038,24 @@ fun LedgerLensSourceSetupApp(
                 statusText = "Opening transaction export..."
                 onExportTransactions()
             },
-            onExportParserCorpus = {
-                statusText = "Opening parser corpus export..."
-                onExportParserCorpus()
+            onExportParserDiagnostics = {
+                statusText = "Opening parser diagnostics export..."
+                onExportParserDiagnostics()
             },
+            rawSmsRetention = rawSmsRetention,
+            onRawSmsRetentionChanged = onRawSmsRetentionChanged,
+            onDeleteExportedFiles = onDeleteExportedFiles,
             onClearAll = {
                 scope.launch(Dispatchers.IO) {
-                    database.transactionDao().deleteAll()
-                    database.transactionRuleDao().deleteAll()
-                    database.financialSourceDao().deleteAll()
-                    database.rawAlertDao().deleteAll()
+                    database.withTransaction {
+                        database.transactionDao().deleteAll()
+                        database.transactionRuleDao().deleteAll()
+                        database.financialSourceDao().deleteAll()
+                        database.rawAlertDao().deleteAll()
+                    }
 
                     withContext(Dispatchers.Main) {
-                        statusText = "Cleared imported SMS, sources, rules, and transactions."
+                        statusText = "Deleted imported alerts, transactions, banks/cards, and rules from this device."
                     }
                 }
             }

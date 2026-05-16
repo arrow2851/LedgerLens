@@ -62,6 +62,7 @@ import com.example.ledgerlens.domain.merchants.optionMatchesSuggestion
 import com.example.ledgerlens.domain.summary.MerchantSummary
 import com.example.ledgerlens.domain.summary.isVirtualUncategorizedCategory
 import com.example.ledgerlens.domain.summary.treatmentLabel
+import com.example.ledgerlens.ui.formatMoney
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -550,7 +551,7 @@ private fun SelectableMerchantRow(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "${item.summary.transactionCount} transactions · ${formatMoney(item.summary.spendingAmountCents)}",
+                    text = "${item.summary.transactionCount} transactions - ${formatMoney(item.summary.spendingAmountCents, item.summary.currency)}",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1028,9 +1029,4 @@ private fun categoryOptionDescription(option: CategoryOption): String {
 
 private fun categoryInitial(categoryName: String): String {
     return categoryName.trim().take(1).uppercase(Locale.US).ifBlank { "O" }
-}
-
-private fun formatMoney(cents: Long): String {
-    val sign = if (cents < 0) "-" else ""
-    return "$sign${'$'}${"%.2f".format(Locale.US, kotlin.math.abs(cents) / 100.0)}"
 }

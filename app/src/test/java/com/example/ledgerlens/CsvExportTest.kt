@@ -2,7 +2,7 @@ package com.example.ledgerlens
 
 import com.example.ledgerlens.data.entity.TransactionEntity
 import com.example.ledgerlens.data.entity.RawAlertEntity
-import com.example.ledgerlens.domain.export.buildParserCorpusJsonl
+import com.example.ledgerlens.domain.export.buildParserDiagnosticsJsonl
 import com.example.ledgerlens.domain.export.buildTransactionsCsv
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -48,7 +48,7 @@ class CsvExportTest {
     }
 
     @Test
-    fun buildParserCorpusJsonlIncludesRawSmsAndCorrections() {
+    fun buildParserDiagnosticsJsonlIncludesRawSmsAndCorrections() {
         val rawAlert = RawAlertEntity(
             id = 1,
             notificationKey = "sms:1",
@@ -63,9 +63,10 @@ class CsvExportTest {
             processingStatus = "PARSED_TRANSACTION"
         )
 
-        val jsonl = buildParserCorpusJsonl(
+        val jsonl = buildParserDiagnosticsJsonl(
             rawAlerts = listOf(rawAlert),
-            transactionsByRawAlertId = mapOf(1L to transaction("Cafe North", "Parser note"))
+            transactionsByRawAlertId = mapOf(1L to transaction("Cafe North", "Parser note")),
+            includeRawSmsText = true
         )
 
         assertTrue(jsonl.contains("\"rawSmsText\":\"Chase Alert: You spent $12.34 at Cafe North.\""))
@@ -77,7 +78,32 @@ class CsvExportTest {
     }
 
     @Test
-    fun buildParserCorpusJsonlIncludesNegativeReimbursementImpact() {
+    fun buildParserDiagnosticsJsonlRedactsRawSmsByDefault() {
+        val rawAlert = RawAlertEntity(
+            id = 1,
+            notificationKey = "sms:1",
+            sourcePackage = "sms",
+            title = "SMS from 24273",
+            text = "Chase Alert: You spent $12.34 at Cafe North.",
+            bigText = null,
+            subText = null,
+            combinedText = "Chase Alert: You spent $12.34 at Cafe North.",
+            postTimeEpochMs = 1_700_000_000_000,
+            capturedAtEpochMs = 1_700_000_000_100,
+            processingStatus = "PARSED_TRANSACTION"
+        )
+
+        val jsonl = buildParserDiagnosticsJsonl(
+            rawAlerts = listOf(rawAlert),
+            transactionsByRawAlertId = emptyMap()
+        )
+
+        assertTrue(jsonl.contains("\"rawSmsText\":\"[redacted]\""))
+        assertFalse(jsonl.contains("Cafe North"))
+    }
+
+    @Test
+    fun buildParserDiagnosticsJsonlIncludesNegativeReimbursementImpact() {
         val rawAlert = RawAlertEntity(
             id = 2,
             notificationKey = "sms:2",
@@ -92,7 +118,7 @@ class CsvExportTest {
             processingStatus = "PARSED_TRANSACTION"
         )
 
-        val jsonl = buildParserCorpusJsonl(
+        val jsonl = buildParserDiagnosticsJsonl(
             rawAlerts = listOf(rawAlert),
             transactionsByRawAlertId = mapOf(
                 2L to transaction(

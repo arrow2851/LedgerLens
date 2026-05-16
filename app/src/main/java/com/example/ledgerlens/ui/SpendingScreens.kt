@@ -1,4 +1,4 @@
-﻿package com.example.ledgerlens.ui
+package com.example.ledgerlens.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
@@ -85,6 +85,7 @@ import com.example.ledgerlens.domain.summary.hasMissingMerchant
 import com.example.ledgerlens.domain.summary.isVirtualUncategorizedCategory
 import com.example.ledgerlens.domain.summary.merchantSummaries
 import com.example.ledgerlens.domain.summary.merchantSummaryName
+import com.example.ledgerlens.domain.summary.spendingImpactByCurrency
 import com.example.ledgerlens.domain.summary.treatmentLabel
 import com.example.ledgerlens.ui.components.CategoryBarRow
 import com.example.ledgerlens.ui.components.FinanceHeroCard
@@ -96,8 +97,6 @@ import com.example.ledgerlens.ui.components.ListSectionHeader
 import com.example.ledgerlens.ui.components.MetricPanel
 import com.example.ledgerlens.ui.components.MetricTile
 import com.example.ledgerlens.ui.components.MiniTrendStrip
-import com.example.ledgerlens.ui.components.QuickActionItem
-import com.example.ledgerlens.ui.components.QuickActionSheet
 import com.example.ledgerlens.ui.components.StatStrip
 import com.example.ledgerlens.ui.components.StatStripItem
 import com.example.ledgerlens.ui.components.TreatmentChip
@@ -114,8 +113,12 @@ import kotlinx.coroutines.withContext
 @Composable
 fun SpendingSummaryScreen(
     transactions: List<TransactionEntity>,
+    rawAlertCount: Int,
+    pendingSourceReviewCount: Int,
+    approvedSourceCount: Int,
+    reviewIssueCount: Int,
     onNavigate: (AppScreen) -> Unit,
-    onQuickActions: () -> Unit,
+    onSyncSmsAlerts: () -> Unit,
     onBack: () -> Unit,
     onTransactionSelected: (TransactionEntity) -> Unit
 ) {
@@ -151,34 +154,49 @@ fun SpendingSummaryScreen(
         )
     }
 
-    val totalExpenseCents = remember(includedExpensesForMonth) {
-        includedExpensesForMonth.sumOf {
-            TransactionTreatments.spendingImpactCents(
-                treatment = it.accountingTreatment,
-                excludedFromSpending = it.excludedFromSpending,
-                amountCents = it.amountCents
-            )
+    val spendingByCurrency = remember(includedExpensesForMonth) {
+        spendingImpactByCurrency(includedExpensesForMonth)
+    }
+
+    val selectedCurrency = remember(spendingByCurrency) {
+        spendingByCurrency.keys.singleOrNull()
+    }
+
+    val totalExpenseCents = remember(spendingByCurrency, selectedCurrency) {
+        selectedCurrency?.let { spendingByCurrency[it] } ?: 0L
+    }
+
+    val totalExpenseText = remember(spendingByCurrency) {
+        formatCurrencyTotals(spendingByCurrency)
+    }
+
+    val previousMonthSpendingCents = remember(previousMonthExpenses, selectedCurrency) {
+        if (selectedCurrency == null) {
+            0L
+        } else {
+            previousMonthExpenses
+                .filter { it.currency.equals(selectedCurrency, ignoreCase = true) }
+                .sumOf {
+                    TransactionTreatments.spendingImpactCents(
+                        treatment = it.accountingTreatment,
+                        excludedFromSpending = it.excludedFromSpending,
+                        amountCents = it.amountCents
+                    )
+                }
         }
     }
 
-    val previousMonthSpendingCents = remember(previousMonthExpenses) {
-        previousMonthExpenses.sumOf {
-            TransactionTreatments.spendingImpactCents(
-                treatment = it.accountingTreatment,
-                excludedFromSpending = it.excludedFromSpending,
-                amountCents = it.amountCents
-            )
-        }
-    }
-
-    val grossExpenseCents = remember(includedExpensesForMonth) {
-        includedExpensesForMonth
+    val grossExpenseCents = remember(includedExpensesForMonth, selectedCurrency) {
+        if (selectedCurrency == null) 0L else includedExpensesForMonth
+            .filter { it.currency.equals(selectedCurrency, ignoreCase = true) }
             .filter { it.accountingTreatment == TransactionTreatments.EXPENSE }
             .sumOf { it.amountCents }
     }
 
-    val offsetCents = remember(includedExpensesForMonth) {
-        includedExpensesForMonth.sumOf {
+    val offsetCents = remember(includedExpensesForMonth, selectedCurrency) {
+        if (selectedCurrency == null) 0L else includedExpensesForMonth
+            .filter { it.currency.equals(selectedCurrency, ignoreCase = true) }
+            .sumOf {
             val impact = TransactionTreatments.spendingImpactCents(
                 treatment = it.accountingTreatment,
                 excludedFromSpending = it.excludedFromSpending,
@@ -192,8 +210,9 @@ fun SpendingSummaryScreen(
         includedExpensesForMonth.count { isVirtualUncategorizedCategory(it.categoryName) }
     }
 
-    val unassignedAmountCents = remember(includedExpensesForMonth) {
-        includedExpensesForMonth
+    val unassignedAmountCents = remember(includedExpensesForMonth, selectedCurrency) {
+        if (selectedCurrency == null) 0L else includedExpensesForMonth
+            .filter { it.currency.equals(selectedCurrency, ignoreCase = true) }
             .filter { isVirtualUncategorizedCategory(it.categoryName) }
             .sumOf {
                 TransactionTreatments.spendingImpactCents(
@@ -218,8 +237,12 @@ fun SpendingSummaryScreen(
             .take(5)
     }
 
-    val trendText = remember(totalExpenseCents, previousMonthSpendingCents) {
-        spendingTrendText(totalExpenseCents, previousMonthSpendingCents)
+    val trendText = remember(totalExpenseCents, previousMonthSpendingCents, selectedCurrency, spendingByCurrency) {
+        if (selectedCurrency == null && spendingByCurrency.size > 1) {
+            "Multiple currencies this month"
+        } else {
+            spendingTrendText(totalExpenseCents, previousMonthSpendingCents)
+        }
     }
 
     val selectedCategoryTransactions = remember(
@@ -235,7 +258,8 @@ fun SpendingSummaryScreen(
                 .filter {
                     val category = displayCategoryName(it.categoryName)
 
-                    category == selected.categoryName
+                    category == selected.categoryName &&
+                        it.currency.equals(selected.currency, ignoreCase = true)
                 }
                 .sortedByDescending { it.occurredAtEpochMs }
         }
@@ -260,7 +284,7 @@ fun SpendingSummaryScreen(
             title = "Spending",
             activeScreen = AppScreen.SUMMARY,
             onNavigate = onNavigate,
-            onQuickActions = onQuickActions,
+            onSyncSmsAlerts = onSyncSmsAlerts,
             onBack = onBack
         ) { padding ->
             LazyColumn(
@@ -273,6 +297,23 @@ fun SpendingSummaryScreen(
             ) {
                 item {
                     Spacer(modifier = Modifier.height(8.dp))
+
+                    if (transactions.isEmpty()) {
+                        FirstRunSetupCard(
+                            rawAlertCount = rawAlertCount,
+                            pendingSourceReviewCount = pendingSourceReviewCount,
+                            approvedSourceCount = approvedSourceCount,
+                            onSyncSmsAlerts = onSyncSmsAlerts,
+                            onReviewBanksCards = { onNavigate(AppScreen.SOURCES) }
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                    } else if (reviewIssueCount > 0) {
+                        InlineInfoPanel(
+                            title = "$reviewIssueCount items need review",
+                            body = "Open Review to check uncertain merchants, categories, and transfers."
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                    }
 
                     MonthSelectorCard(
                         monthStartEpochMs = selectedMonthStart,
@@ -293,11 +334,13 @@ fun SpendingSummaryScreen(
 
                 item {
                     SpendingSummaryTopCard(
-                        totalExpenseCents = totalExpenseCents,
+                        totalExpenseText = totalExpenseText,
                         grossExpenseCents = grossExpenseCents,
                         offsetCents = offsetCents,
                         includedExpenseCount = includedExpensesForMonth.size,
-                        trendText = trendText
+                        trendText = trendText,
+                        currency = selectedCurrency ?: "USD",
+                        hasMultipleCurrencies = spendingByCurrency.size > 1
                     )
                 }
 
@@ -306,6 +349,8 @@ fun SpendingSummaryScreen(
                         UnassignedSpendingCallout(
                             transactionCount = unassignedCount,
                             amountCents = unassignedAmountCents,
+                            currency = selectedCurrency ?: "USD",
+                            hasMultipleCurrencies = spendingByCurrency.size > 1,
                             onClick = {
                                 onNavigate(AppScreen.REVIEW_QUEUE)
                             }
@@ -317,7 +362,7 @@ fun SpendingSummaryScreen(
                     SpendingCategoryBreakdownPanel(
                         categorySummaries = categorySummaries,
                         chartSummaries = categorySummaries,
-                        totalExpenseCents = totalExpenseCents,
+                        totalExpenseText = totalExpenseText,
                         totalActivityCents = categoryBarTotalCents,
                         onCategorySelected = { summary ->
                             selectedCategorySummary = summary
@@ -344,12 +389,76 @@ fun SpendingSummaryScreen(
 }
 
 @Composable
+fun FirstRunSetupCard(
+    rawAlertCount: Int,
+    pendingSourceReviewCount: Int,
+    approvedSourceCount: Int,
+    onSyncSmsAlerts: () -> Unit,
+    onReviewBanksCards: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        tonalElevation = 0.dp,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "Start with SMS alerts",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+            )
+            Text(
+                text = "LedgerLens turns financial SMS alerts into local spending insights. SMS stays on this device.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Sync alerts, review banks/cards if needed, then check transactions and spending.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            val status = when {
+                pendingSourceReviewCount > 0 -> "$pendingSourceReviewCount banks/cards need review"
+                approvedSourceCount > 0 && rawAlertCount > 0 -> "Approved senders found. Sync again to process new alerts."
+                rawAlertCount > 0 -> "$rawAlertCount alerts imported. Review banks/cards next."
+                else -> "No SMS alerts imported yet."
+            }
+            Text(
+                text = status,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onSyncSmsAlerts) {
+                    Text("Sync SMS alerts")
+                }
+                if (pendingSourceReviewCount > 0 || rawAlertCount > 0) {
+                    OutlinedButton(onClick = onReviewBanksCards) {
+                        Text("Review banks & cards")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun SpendingSummaryTopCard(
-    totalExpenseCents: Long,
+    totalExpenseText: String,
     grossExpenseCents: Long,
     offsetCents: Long,
     includedExpenseCount: Int,
-    trendText: String
+    trendText: String,
+    currency: String,
+    hasMultipleCurrencies: Boolean
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -368,7 +477,7 @@ fun SpendingSummaryTopCard(
             )
 
             Text(
-                text = formatSignedMoney(totalExpenseCents),
+                text = totalExpenseText,
                 style = MaterialTheme.typography.headlineLarge,
                 color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
@@ -381,8 +490,10 @@ fun SpendingSummaryTopCard(
             )
 
             Text(
-                text = if (offsetCents > 0) {
-                    "$includedExpenseCount transactions - ${formatSignedMoney(grossExpenseCents)} gross · ${formatSignedMoney(offsetCents)} offsets"
+                text = if (hasMultipleCurrencies) {
+                    "$includedExpenseCount spending transactions across currencies"
+                } else if (offsetCents > 0) {
+                    "$includedExpenseCount transactions - ${formatSignedMoney(grossExpenseCents, currency)} gross - ${formatSignedMoney(offsetCents, currency)} offsets"
                 } else {
                     "$includedExpenseCount spending transactions"
                 },
@@ -397,7 +508,7 @@ fun SpendingSummaryTopCard(
 fun SpendingCategoryBreakdownPanel(
     categorySummaries: List<CategorySpendSummary>,
     chartSummaries: List<CategorySpendSummary>,
-    totalExpenseCents: Long,
+    totalExpenseText: String,
     totalActivityCents: Long,
     onCategorySelected: (CategorySpendSummary) -> Unit
 ) {
@@ -431,7 +542,7 @@ fun SpendingCategoryBreakdownPanel(
 
             SpendingDonutChart(
                 summaries = chartSummaries,
-                centerText = formatSignedMoney(totalExpenseCents),
+                centerText = totalExpenseText,
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(1.25f)
@@ -544,7 +655,7 @@ fun SpendingCategoryListRow(
         0f
     }
     val offsetText = if (summary.refundOffsetCents > 0) {
-        " - ${formatSignedMoney(-summary.refundOffsetCents)} offsets"
+        " - ${formatSignedMoney(-summary.refundOffsetCents, summary.currency)} offsets"
     } else {
         ""
     }
@@ -594,7 +705,7 @@ fun SpendingCategoryListRow(
 
             Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
                 Text(
-                    text = formatSignedMoney(summary.amountCents),
+                    text = formatSignedMoney(summary.amountCents, summary.currency),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
                 )
@@ -676,6 +787,8 @@ fun MonthSelectorCard(
 fun UnassignedSpendingCallout(
     transactionCount: Int,
     amountCents: Long,
+    currency: String,
+    hasMultipleCurrencies: Boolean,
     onClick: () -> Unit
 ) {
     Surface(
@@ -718,7 +831,7 @@ fun UnassignedSpendingCallout(
 
             Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
                 Text(
-                    text = formatSignedMoney(amountCents),
+                    text = if (hasMultipleCurrencies) "Multiple" else formatSignedMoney(amountCents, currency),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
                 )
@@ -827,7 +940,7 @@ fun TopMerchantRow(
         }
 
         Text(
-            text = formatSignedMoney(merchant.spendingAmountCents),
+            text = formatSignedMoney(merchant.spendingAmountCents, merchant.currency),
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
         )
@@ -977,7 +1090,7 @@ fun CategoryDrilldownScreen(
                 CategoryDetailSummaryCard(
                     monthLabel = monthLabel,
                     summary = summary,
-                    amountText = formatSignedMoney(summary.amountCents)
+                    amountText = formatSignedMoney(summary.amountCents, summary.currency)
                 )
             }
 
@@ -1004,7 +1117,7 @@ fun CategoryDrilldownScreen(
                         LedgerListRow(
                             title = merchantName,
                             supportingText = "$transactionCount transactions",
-                            trailingText = formatSignedMoney(amountCents),
+                            trailingText = formatSignedMoney(amountCents, summary.currency),
                             leadingText = merchantName.take(1)
                         )
                         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
@@ -1090,7 +1203,6 @@ fun CategoryTransactionCard(
         excludedFromSpending = transaction.excludedFromSpending,
         amountCents = transaction.amountCents
     )
-    val amount = transaction.amountCents / 100.0
     val spendingMerchant = transaction.spendingMerchantName?.takeIf { it.isNotBlank() }
     val payerPayee = transaction.displayMerchantName ?: transaction.merchantRaw
 
@@ -1106,63 +1218,9 @@ fun CategoryTransactionCard(
         },
         metadataText = displayCategoryName(transaction.categoryName),
         pillText = if (transaction.reviewStatus == "NEEDS_REVIEW") "Review" else null,
-        trailingText = formatSignedMoney(spendingImpact),
-        leadingText = transaction.displayMerchantName?.take(1) ?: "$",
+        trailingText = formatSignedMoney(spendingImpact, transaction.currency),
+        leadingText = transaction.displayMerchantName?.take(1) ?: transaction.currency.take(1),
         onClick = onClick
     )
-    return
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp)
-        ) {
-            Text(
-                text = transaction.displayMerchantName
-                    ?: transaction.merchantRaw
-                    ?: transaction.sourceInstitution
-                    ?: "Unknown merchant",
-                style = MaterialTheme.typography.titleSmall
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "$${"%.2f".format(amount)}",
-                style = MaterialTheme.typography.bodyLarge
-            )
-
-            Text(
-                text = formatter.format(Date(transaction.occurredAtEpochMs)),
-                style = MaterialTheme.typography.labelSmall
-            )
-
-            val categoryText = transaction.categoryName.orEmpty()
-
-            if (categoryText.isNotBlank()) {
-                Text(
-                    text = categoryText,
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
-
-            if (transaction.reviewStatus == "NEEDS_REVIEW") {
-                Text(
-                    text = "Needs review",
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "Tap for details",
-                style = MaterialTheme.typography.labelSmall
-            )
-        }
-    }
 }
 

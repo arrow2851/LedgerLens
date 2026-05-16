@@ -5,6 +5,8 @@ import com.example.ledgerlens.domain.TransactionTreatments
 import com.example.ledgerlens.domain.summary.categorySpendSummaries
 import com.example.ledgerlens.domain.summary.expenseTransactionsForRange
 import com.example.ledgerlens.domain.summary.merchantSummaries
+import com.example.ledgerlens.domain.summary.spendingImpactByCurrency
+import com.example.ledgerlens.ui.formatMoney
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -133,6 +135,44 @@ class SummaryDomainTest {
     }
 
     @Test
+    fun categorySummariesDoNotCombineMixedCurrencies() {
+        val transactions = listOf(
+            transaction(
+                id = 1,
+                merchant = "Target",
+                amountCents = 1200,
+                treatment = TransactionTreatments.EXPENSE,
+                excludedFromSpending = false,
+                categoryName = "Groceries",
+                currency = "USD"
+            ),
+            transaction(
+                id = 2,
+                merchant = "Zomato",
+                amountCents = 86910,
+                treatment = TransactionTreatments.EXPENSE,
+                excludedFromSpending = false,
+                categoryName = "Groceries",
+                currency = "INR"
+            )
+        )
+
+        val summaries = categorySpendSummaries(transactions)
+        val totals = spendingImpactByCurrency(transactions)
+
+        assertEquals(2, summaries.size)
+        assertEquals(1200L, totals["USD"])
+        assertEquals(86910L, totals["INR"])
+    }
+
+    @Test
+    fun moneyFormattingSupportsUsdInrAndFallback() {
+        assertEquals("${'$'}12.34", formatMoney(1234, "USD"))
+        assertEquals("INR 869.10", formatMoney(86910, "INR"))
+        assertEquals("EUR 12.34", formatMoney(1234, "EUR"))
+    }
+
+    @Test
     fun merchantSummariesIncludeAllAccountingTreatments() {
         val transactions = listOf(
             transaction(
@@ -240,7 +280,8 @@ class SummaryDomainTest {
         treatment: String,
         excludedFromSpending: Boolean,
         categoryName: String? = null,
-        spendingMerchantName: String? = null
+        spendingMerchantName: String? = null,
+        currency: String = "USD"
     ): TransactionEntity {
         return TransactionEntity(
             id = id,
@@ -249,7 +290,7 @@ class SummaryDomainTest {
             transactionType = treatment,
             accountingTreatment = treatment,
             amountCents = amountCents,
-            currency = "USD",
+            currency = currency,
             merchantRaw = merchant,
             displayMerchantName = merchant,
             sourceInstitution = "Test Bank",

@@ -1,4 +1,4 @@
-﻿package com.example.ledgerlens.ui
+package com.example.ledgerlens.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
@@ -86,6 +86,7 @@ import com.example.ledgerlens.domain.summary.isVirtualUncategorizedCategory
 import com.example.ledgerlens.domain.summary.merchantSummaries
 import com.example.ledgerlens.domain.summary.merchantSummaryName
 import com.example.ledgerlens.domain.summary.treatmentLabel
+import com.example.ledgerlens.domain.transactions.TransactionEditDraft
 import com.example.ledgerlens.ui.components.CategoryBarRow
 import com.example.ledgerlens.ui.components.FinanceHeroCard
 import com.example.ledgerlens.ui.components.InlineInfoPanel
@@ -96,8 +97,6 @@ import com.example.ledgerlens.ui.components.ListSectionHeader
 import com.example.ledgerlens.ui.components.MetricPanel
 import com.example.ledgerlens.ui.components.MetricTile
 import com.example.ledgerlens.ui.components.MiniTrendStrip
-import com.example.ledgerlens.ui.components.QuickActionItem
-import com.example.ledgerlens.ui.components.QuickActionSheet
 import com.example.ledgerlens.ui.components.StatStrip
 import com.example.ledgerlens.ui.components.StatStripItem
 import com.example.ledgerlens.ui.components.TreatmentChip
@@ -117,11 +116,7 @@ fun TransactionDetailScreen(
     rawAlert: RawAlertEntity?,
     allTransactions: List<TransactionEntity>,
     onBack: () -> Unit,
-    onUpdateTransactionType: (String, Boolean) -> Unit,
-    onUpdateReviewStatus: (String) -> Unit,
-    onUpdateExcludedFromSpending: (Boolean) -> Unit,
-    onUpdateMerchant: (String) -> Unit,
-    onUpdateSpendingAttribution: (String, String) -> Unit,
+    onSaveTransactionDraft: (TransactionEditDraft, (Throwable?) -> Unit) -> Unit,
     onApplyMerchantToSimilar: (String, String, (Int) -> Unit) -> Unit,
     onApplyCurrentClassificationToSimilar: (String, (Int) -> Unit) -> Unit,
     onApplyCategoryToSimilar: (String, String, (Int) -> Unit) -> Unit,
@@ -143,8 +138,8 @@ fun TransactionDetailScreen(
         mutableStateOf(false)
     }
 
-    var saveMessage by remember(transaction.id) {
-        mutableStateOf<String?>(null)
+    var saveState by remember(transaction.id) {
+        mutableStateOf<TransactionDetailSaveState>(TransactionDetailSaveState.Idle)
     }
 
     var merchantDraft by remember(transaction.id, transaction.displayMerchantName, transaction.merchantRaw) {
@@ -270,11 +265,24 @@ fun TransactionDetailScreen(
                             "NEEDS_REVIEW"
                         }
                         reviewStatusDraft = nextStatus
-                        onUpdateReviewStatus(nextStatus)
-                        saveMessage = if (nextStatus == "REVIEWED") {
-                            "Marked reviewed"
-                        } else {
-                            "Marked as needs review"
+                        saveState = TransactionDetailSaveState.Saving
+                        onSaveTransactionDraft(
+                            currentDraft(
+                                merchantDraft = merchantDraft,
+                                categoryDraft = categoryDraft,
+                                treatmentDraft = treatmentDraft,
+                                excludedDraft = excludedDraft,
+                                reviewStatusDraft = nextStatus,
+                                spendingMerchantDraft = spendingMerchantDraft
+                            )
+                        ) { error ->
+                            saveState = if (error == null) {
+                                TransactionDetailSaveState.Saved(
+                                    if (nextStatus == "REVIEWED") "Marked reviewed" else "Marked as needs review"
+                                )
+                            } else {
+                                TransactionDetailSaveState.Failed(error.message ?: "Could not save review status.")
+                            }
                         }
                     }
                 )
@@ -309,10 +317,16 @@ fun TransactionDetailScreen(
                             categoryDraft = "Transfer"
                             spendingMerchantDraft = ""
                             reviewStatusDraft = "REVIEWED"
-                            onUpdateTransactionType(treatment, true)
-                            onUpdateSpendingAttribution("Transfer", "")
-                            onUpdateReviewStatus("REVIEWED")
-                            saveMessage = "Saved as personal transfer"
+                            saveState = TransactionDetailSaveState.Saving
+                            onSaveTransactionDraft(
+                                currentDraft(merchantDraft, "Transfer", treatment, true, "REVIEWED", "")
+                            ) { error ->
+                                saveState = if (error == null) {
+                                    TransactionDetailSaveState.Saved("Saved as personal transfer")
+                                } else {
+                                    TransactionDetailSaveState.Failed(error.message ?: "Could not save transfer.")
+                                }
+                            }
                         },
                         onMarkReimbursement = { category, spendingMerchant ->
                             treatmentDraft = TransactionTreatments.REIMBURSEMENT
@@ -320,10 +334,16 @@ fun TransactionDetailScreen(
                             categoryDraft = category
                             spendingMerchantDraft = spendingMerchant
                             reviewStatusDraft = "REVIEWED"
-                            onUpdateTransactionType(TransactionTreatments.REIMBURSEMENT, false)
-                            onUpdateSpendingAttribution(category, spendingMerchant)
-                            onUpdateReviewStatus("REVIEWED")
-                            saveMessage = "Saved as reimbursement"
+                            saveState = TransactionDetailSaveState.Saving
+                            onSaveTransactionDraft(
+                                currentDraft(merchantDraft, category, TransactionTreatments.REIMBURSEMENT, false, "REVIEWED", spendingMerchant)
+                            ) { error ->
+                                saveState = if (error == null) {
+                                    TransactionDetailSaveState.Saved("Saved as reimbursement")
+                                } else {
+                                    TransactionDetailSaveState.Failed(error.message ?: "Could not save reimbursement.")
+                                }
+                            }
                         },
                         onMarkExpense = { category, spendingMerchant ->
                             treatmentDraft = TransactionTreatments.EXPENSE
@@ -331,10 +351,16 @@ fun TransactionDetailScreen(
                             categoryDraft = category
                             spendingMerchantDraft = spendingMerchant
                             reviewStatusDraft = "REVIEWED"
-                            onUpdateTransactionType(TransactionTreatments.EXPENSE, false)
-                            onUpdateSpendingAttribution(category, spendingMerchant)
-                            onUpdateReviewStatus("REVIEWED")
-                            saveMessage = "Saved as shared expense"
+                            saveState = TransactionDetailSaveState.Saving
+                            onSaveTransactionDraft(
+                                currentDraft(merchantDraft, category, TransactionTreatments.EXPENSE, false, "REVIEWED", spendingMerchant)
+                            ) { error ->
+                                saveState = if (error == null) {
+                                    TransactionDetailSaveState.Saved("Saved as shared expense")
+                                } else {
+                                    TransactionDetailSaveState.Failed(error.message ?: "Could not save shared expense.")
+                                }
+                            }
                         },
                         onMarkIncomeGift = {
                             treatmentDraft = TransactionTreatments.INCOME
@@ -342,10 +368,16 @@ fun TransactionDetailScreen(
                             categoryDraft = "Income"
                             spendingMerchantDraft = ""
                             reviewStatusDraft = "REVIEWED"
-                            onUpdateTransactionType(TransactionTreatments.INCOME, true)
-                            onUpdateSpendingAttribution("Income", "")
-                            onUpdateReviewStatus("REVIEWED")
-                            saveMessage = "Saved as income or gift"
+                            saveState = TransactionDetailSaveState.Saving
+                            onSaveTransactionDraft(
+                                currentDraft(merchantDraft, "Income", TransactionTreatments.INCOME, true, "REVIEWED", "")
+                            ) { error ->
+                                saveState = if (error == null) {
+                                    TransactionDetailSaveState.Saved("Saved as income or gift")
+                                } else {
+                                    TransactionDetailSaveState.Failed(error.message ?: "Could not save income/gift.")
+                                }
+                            }
                         }
                     )
                 }
@@ -354,38 +386,55 @@ fun TransactionDetailScreen(
             item {
                 Button(
                     onClick = {
-                        if (merchantDraft != (transaction.displayMerchantName ?: transaction.merchantRaw ?: "")) {
-                            onUpdateMerchant(merchantDraft)
+                        saveState = TransactionDetailSaveState.Saving
+                        onSaveTransactionDraft(
+                            currentDraft(
+                                merchantDraft = merchantDraft,
+                                categoryDraft = categoryDraft,
+                                treatmentDraft = treatmentDraft,
+                                excludedDraft = excludedDraft,
+                                reviewStatusDraft = reviewStatusDraft,
+                                spendingMerchantDraft = spendingMerchantDraft
+                            )
+                        ) { error ->
+                            saveState = if (error == null) {
+                                TransactionDetailSaveState.Saved("Saved changes")
+                            } else {
+                                TransactionDetailSaveState.Failed(error.message ?: "Could not save changes.")
+                            }
                         }
-                        if (
-                            categoryDraft != transaction.categoryName.orEmpty() ||
-                            spendingMerchantDraft != transaction.spendingMerchantName.orEmpty()
-                        ) {
-                            onUpdateSpendingAttribution(categoryDraft, spendingMerchantDraft)
-                        }
-                        if (
-                            treatmentDraft != transaction.accountingTreatment ||
-                            excludedDraft != transaction.excludedFromSpending
-                        ) {
-                            onUpdateTransactionType(treatmentDraft, excludedDraft)
-                        }
-                        if (reviewStatusDraft != transaction.reviewStatus) {
-                            onUpdateReviewStatus(reviewStatusDraft)
-                        }
-                        saveMessage = "Saved changes"
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Save changes")
+                    Text(if (saveState is TransactionDetailSaveState.Saving) "Saving..." else "Save changes")
                 }
             }
 
-            saveMessage?.let { message ->
-                item {
-                    InlineInfoPanel(
-                        title = "Saved",
-                        body = message
-                    )
+            when (val state = saveState) {
+                TransactionDetailSaveState.Idle -> Unit
+                TransactionDetailSaveState.Saving -> {
+                    item {
+                        InlineInfoPanel(
+                            title = "Saving",
+                            body = "Saving changes..."
+                        )
+                    }
+                }
+                is TransactionDetailSaveState.Saved -> {
+                    item {
+                        InlineInfoPanel(
+                            title = "Saved",
+                            body = state.message
+                        )
+                    }
+                }
+                is TransactionDetailSaveState.Failed -> {
+                    item {
+                        InlineInfoPanel(
+                            title = "Could not save",
+                            body = state.message
+                        )
+                    }
                 }
             }
 
@@ -451,6 +500,31 @@ fun TransactionDetailScreen(
     }
 }
 
+sealed interface TransactionDetailSaveState {
+    data object Idle : TransactionDetailSaveState
+    data object Saving : TransactionDetailSaveState
+    data class Saved(val message: String) : TransactionDetailSaveState
+    data class Failed(val message: String) : TransactionDetailSaveState
+}
+
+private fun currentDraft(
+    merchantDraft: String,
+    categoryDraft: String,
+    treatmentDraft: String,
+    excludedDraft: Boolean,
+    reviewStatusDraft: String,
+    spendingMerchantDraft: String
+): TransactionEditDraft {
+    return TransactionEditDraft(
+        merchantName = merchantDraft,
+        categoryName = categoryDraft,
+        accountingTreatment = treatmentDraft,
+        excludedFromSpending = excludedDraft,
+        reviewStatus = reviewStatusDraft,
+        spendingMerchantName = spendingMerchantDraft
+    )
+}
+
 @Composable
 fun TransactionDetailHeaderCard(
     transaction: TransactionEntity,
@@ -460,8 +534,6 @@ fun TransactionDetailHeaderCard(
         ?: transaction.merchantRaw
         ?: "Unknown merchant"
     val category = transaction.categoryName?.takeIf { it.isNotBlank() }
-    val amount = transaction.amountCents / 100.0
-
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
@@ -510,7 +582,7 @@ fun TransactionDetailHeaderCard(
 
             Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
                 Text(
-                    text = "$${"%.2f".format(amount)}",
+                    text = formatMoney(transaction.amountCents, transaction.currency),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                 )
@@ -542,7 +614,7 @@ fun TransactionFactsCard(
     val sourceText = listOfNotNull(
         transaction.sourceInstitution,
         transaction.accountHint?.let { "Account $it" }
-    ).joinToString(" - ").ifBlank { transaction.sourceKey }
+    ).joinToString(" - ").ifBlank { "SMS alert" }
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -559,7 +631,7 @@ fun TransactionFactsCard(
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
             )
-            DetailRow("Amount", "$${"%.2f".format(transaction.amountCents / 100.0)}")
+            DetailRow("Amount", formatMoney(transaction.amountCents, transaction.currency))
             DetailRow("Date", formatter.format(Date(transaction.occurredAtEpochMs)))
             DetailRow("Source / Account", sourceText)
 
@@ -569,7 +641,7 @@ fun TransactionFactsCard(
                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Original SMS",
+                    text = "Message used",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
                 )
@@ -580,7 +652,7 @@ fun TransactionFactsCard(
 
             if (showOriginalSms) {
                 Text(
-                    text = rawAlert?.combinedText ?: "Original SMS was not found.",
+                    text = rawAlert?.combinedText ?: "Message was not found.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -637,7 +709,7 @@ fun EditableTransactionDetailsCard(
             )
 
             Text(
-                text = "Accounting treatment",
+                text = "How to count this",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
             )
@@ -657,7 +729,7 @@ fun EditableTransactionDetailsCard(
             )
 
             Text(
-                text = "Counts toward spending",
+                text = "Included in spending",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
             )
@@ -724,7 +796,7 @@ fun EditableTransactionDetailsCard(
                 text = if (spendingImpact == 0L) {
                     "Current spending impact: outside spending"
                 } else {
-                    "Current spending impact: ${formatSignedMoney(spendingImpact)}"
+                    "Current spending impact: ${formatSignedMoney(spendingImpact, transaction.currency)}"
                 },
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -930,86 +1002,6 @@ fun transactionCategoryOptions(transactions: List<TransactionEntity>): List<Stri
 }
 
 @Composable
-fun TransactionOverviewCard(
-    transaction: TransactionEntity,
-    formatter: SimpleDateFormat
-) {
-    val amount = transaction.amountCents / 100.0
-    val merchant = transaction.displayMerchantName
-        ?: transaction.merchantRaw
-        ?: "Unknown merchant"
-    val spendingMerchant = transaction.spendingMerchantName?.takeIf { it.isNotBlank() }
-    val category = if (transaction.categoryName.isNullOrBlank()) {
-        "Not assigned"
-    } else {
-        transaction.categoryName
-    }
-    val spendingImpact = TransactionTreatments.spendingImpactCents(
-        treatment = transaction.accountingTreatment,
-        excludedFromSpending = transaction.excludedFromSpending,
-        amountCents = transaction.amountCents
-    )
-
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface,
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
-        tonalElevation = 0.dp
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp)
-        ) {
-            Text(
-                text = merchant,
-                style = MaterialTheme.typography.titleMedium
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "$${"%.2f".format(amount)}",
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.primary
-            )
-
-            Text("${treatmentLabel(transaction.accountingTreatment)} - $category")
-            Text(formatter.format(Date(transaction.occurredAtEpochMs)))
-
-            if (!spendingMerchant.isNullOrBlank()) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Spending merchant: $spendingMerchant",
-                    style = MaterialTheme.typography.labelMedium
-                )
-            }
-
-            if (spendingImpact != 0L) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Spending impact: ${formatSignedMoney(spendingImpact)}",
-                    style = MaterialTheme.typography.labelMedium
-                )
-            } else {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Tracked outside Spending Summary",
-                    style = MaterialTheme.typography.labelMedium
-                )
-            }
-
-            if (transaction.reviewStatus == "NEEDS_REVIEW") {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Needs review",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.tertiary
-                )
-            }
-        }
-    }
-}
-
-@Composable
 fun TransactionTechnicalDetailsCard(
     transaction: TransactionEntity,
     rawAlert: RawAlertEntity?,
@@ -1045,7 +1037,7 @@ fun TransactionTechnicalDetailsCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Original SMS",
+                text = "Message used",
                 style = MaterialTheme.typography.titleSmall
             )
 
@@ -1053,7 +1045,7 @@ fun TransactionTechnicalDetailsCard(
 
             if (rawAlert == null) {
                 Text(
-                    text = "Original SMS was not found.",
+                    text = "Message was not found.",
                     style = MaterialTheme.typography.bodyMedium
                 )
             } else {
@@ -1195,281 +1187,6 @@ fun DetailRow(
             text = value,
             style = MaterialTheme.typography.bodyMedium
         )
-    }
-}
-
-@Composable
-fun TransactionCorrectionCard(
-    transaction: TransactionEntity,
-    onUpdateTransactionType: (String, Boolean) -> Unit,
-    onUpdateReviewStatus: (String) -> Unit,
-    onUpdateExcludedFromSpending: (Boolean) -> Unit
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface,
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
-        tonalElevation = 0.dp
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp)
-        ) {
-            Text(
-                text = "Classification",
-                style = MaterialTheme.typography.titleMedium
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Text(
-                text = "Accounting Treatment",
-                style = MaterialTheme.typography.titleSmall
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = { onUpdateTransactionType(TransactionTreatments.EXPENSE, false) },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Expense")
-                }
-
-                Button(
-                    onClick = { onUpdateTransactionType(TransactionTreatments.TRANSFER, true) },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Transfer")
-                }
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = { onUpdateTransactionType(TransactionTreatments.CREDIT_CARD_PAYMENT, true) },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("CC Pay")
-                }
-
-                Button(
-                    onClick = { onUpdateTransactionType(TransactionTreatments.INCOME, true) },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Income")
-                }
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = { onUpdateTransactionType(TransactionTreatments.REFUND, false) },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Refund")
-                }
-
-                Button(
-                    onClick = { onUpdateTransactionType(TransactionTreatments.PERSON_TO_PERSON, true) },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Person")
-                }
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            OutlinedButton(
-                onClick = { onUpdateTransactionType(TransactionTreatments.REIMBURSEMENT, false) },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Reimbursement")
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            OutlinedButton(
-                onClick = { onUpdateTransactionType(TransactionTreatments.UNKNOWN, true) },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Mark as Unknown")
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Text(
-                text = "Review Status",
-                style = MaterialTheme.typography.titleSmall
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = { onUpdateReviewStatus("REVIEWED") },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Reviewed")
-                }
-
-                Button(
-                    onClick = { onUpdateReviewStatus("NEEDS_REVIEW") },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Needs Review")
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Text(
-                text = "Spending Summary Override",
-                style = MaterialTheme.typography.titleSmall
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = { onUpdateExcludedFromSpending(false) },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Count in Spending")
-                }
-
-                Button(
-                    onClick = { onUpdateExcludedFromSpending(true) },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Track Outside")
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            val spendingImpact = TransactionTreatments.spendingImpactCents(
-                treatment = transaction.accountingTreatment,
-                excludedFromSpending = transaction.excludedFromSpending,
-                amountCents = transaction.amountCents
-            )
-            val spendingState = if (spendingImpact == 0L) {
-                "Outside spending"
-            } else {
-                "Spending impact ${formatSignedMoney(spendingImpact)}"
-            }
-
-            Text(
-                text = "Current: ${treatmentLabel(transaction.accountingTreatment)} - ${transaction.reviewStatus} - $spendingState",
-                style = MaterialTheme.typography.labelSmall
-            )
-
-            if (!transaction.categoryName.isNullOrBlank()) {
-                Text(
-                    text = "Category: ${transaction.categoryName}",
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun MerchantCorrectionCard(
-    transaction: TransactionEntity,
-    onUpdateMerchant: (String) -> Unit,
-    onOpenParserRuleEditor: (() -> Unit)? = null
-) {
-    var merchantText by remember(transaction.id, transaction.displayMerchantName, transaction.merchantRaw) {
-        mutableStateOf(
-            transaction.displayMerchantName
-                ?: transaction.merchantRaw
-                ?: ""
-        )
-    }
-
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface,
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
-        tonalElevation = 0.dp
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp)
-        ) {
-            Text(
-                text = "Merchant / Payee",
-                style = MaterialTheme.typography.titleMedium
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "Edit display name changes this transaction only. Use parser rules when the SMS wording should be recognized in the future.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            OutlinedTextField(
-                value = merchantText,
-                onValueChange = { merchantText = it },
-                label = { Text("Merchant or payee name") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Button(
-                onClick = {
-                    onUpdateMerchant(merchantText)
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Save Display Name")
-            }
-
-            if (onOpenParserRuleEditor != null) {
-                Spacer(modifier = Modifier.height(8.dp))
-
-                OutlinedButton(
-                    onClick = onOpenParserRuleEditor,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Fix Parser Rule")
-                }
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Text(
-                text = "Current parsed merchant: ${
-                    transaction.displayMerchantName
-                        ?: transaction.merchantRaw
-                        ?: "Not detected"
-                }",
-                style = MaterialTheme.typography.labelSmall
-            )
-        }
     }
 }
 
@@ -1620,7 +1337,11 @@ fun SimilarTransactionsCorrectionCard(
             )
             Text(
                 text = "Current classification: ${treatmentLabel(transaction.accountingTreatment)} - ${transaction.reviewStatus} - ${
-                    if (currentImpact == 0L) "Outside spending" else "Impact ${formatSignedMoney(currentImpact)}"
+                    if (currentImpact == 0L) {
+                        "Outside spending"
+                    } else {
+                        "Impact ${formatSignedMoney(currentImpact, transaction.currency)}"
+                    }
                 }",
                 style = MaterialTheme.typography.labelSmall
             )
@@ -1645,7 +1366,7 @@ fun SimilarTransactionsCorrectionCard(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = "Original SMS preview:",
+                    text = "Message preview:",
                     style = MaterialTheme.typography.labelSmall
                 )
 

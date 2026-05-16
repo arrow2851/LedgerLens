@@ -6,6 +6,7 @@ import com.example.ledgerlens.data.entity.TransactionRuleEntity
 import com.example.ledgerlens.domain.TransactionTreatments
 import com.example.ledgerlens.domain.rules.applyRulesToTransaction
 import com.example.ledgerlens.domain.rules.normalizeRulePhrase
+import com.example.ledgerlens.domain.rules.RuleKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -149,6 +150,54 @@ class TransactionRuleApplicationTest {
         assertEquals("Sam's Club", updated.displayMerchantName)
     }
 
+    @Test
+    fun aliasesNormalizeEquivalentMerchantText() {
+        assertEquals(normalizeRulePhrase("SAMS CLUB"), normalizeRulePhrase("Sam's-Club"))
+        assertEquals(normalizeRulePhrase("SAMSCLUB"), normalizeRulePhrase("Sam's Club"))
+    }
+
+    @Test
+    fun broadInstitutionAliasDoesNotRewriteEveryTransaction() {
+        val rawAlert = rawAlert("Chase Alert: You spent $42.10 at Target.")
+        val transaction = transaction(merchant = "Target")
+        val rule = TransactionRuleEntity(
+            sourceKey = "sender:24273",
+            matchPhrase = "Chase",
+            normalizedMatchPhrase = normalizeRulePhrase("Chase"),
+            merchantName = "Chase Bank",
+            createdAtEpochMs = 1_700_000_000_000,
+            updatedAtEpochMs = 1_700_000_000_000
+        )
+
+        val updated = applyRulesToTransaction(
+            transaction = transaction,
+            rawAlert = rawAlert,
+            sourceRules = listOf(rule),
+            merchantDefaultRules = emptyList()
+        )
+
+        assertEquals("Target", updated.displayMerchantName)
+    }
+
+    @Test
+    fun applyingSameRuleTwiceDoesNotAppendDuplicateNotes() {
+        val rawAlert = rawAlert("Card purchase $42.10 at SAMS Club #8839.")
+        val transaction = transaction(merchant = "Unknown merchant")
+        val rule = TransactionRuleEntity(
+            sourceKey = "sender:24273",
+            matchPhrase = "SAMSCLUB",
+            normalizedMatchPhrase = normalizeRulePhrase("SAMSCLUB"),
+            merchantName = "Sam's Club",
+            createdAtEpochMs = 1_700_000_000_000,
+            updatedAtEpochMs = 1_700_000_000_000
+        )
+
+        val once = applyRulesToTransaction(transaction, rawAlert, listOf(rule))
+        val twice = applyRulesToTransaction(once, rawAlert, listOf(rule))
+
+        assertEquals(once.parserNotes, twice.parserNotes)
+    }
+
     private fun rawAlert(body: String): RawAlertEntity {
         return RawAlertEntity(
             id = 7,
@@ -207,10 +256,11 @@ class TransactionRuleApplicationTest {
             sourceKey = "__merchant_defaults__",
             matchPhrase = merchant,
             normalizedMatchPhrase = normalizeRulePhrase(merchant),
+            ruleKind = RuleKind.MERCHANT_DEFAULT,
             merchantName = merchant,
             categoryName = category,
             transactionType = transactionType,
-            appliesToTreatment = transactionType,
+            appliesToTreatment = null,
             excludedFromSpending = transactionType?.let {
                 TransactionTreatments.defaultExcludedFromSpending(it)
             },

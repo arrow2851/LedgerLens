@@ -96,8 +96,6 @@ import com.example.ledgerlens.ui.components.ListSectionHeader
 import com.example.ledgerlens.ui.components.MetricPanel
 import com.example.ledgerlens.ui.components.MetricTile
 import com.example.ledgerlens.ui.components.MiniTrendStrip
-import com.example.ledgerlens.ui.components.QuickActionItem
-import com.example.ledgerlens.ui.components.QuickActionSheet
 import com.example.ledgerlens.ui.components.StatStrip
 import com.example.ledgerlens.ui.components.StatStripItem
 import com.example.ledgerlens.ui.components.TreatmentChip
@@ -115,7 +113,7 @@ import kotlinx.coroutines.withContext
 fun TransactionReviewScreen(
     transactions: List<TransactionEntity>,
     onNavigate: (AppScreen) -> Unit,
-    onQuickActions: () -> Unit,
+    onSyncSmsAlerts: () -> Unit,
     onBack: () -> Unit,
     onTransactionSelected: (TransactionEntity) -> Unit
 ) {
@@ -241,13 +239,17 @@ fun TransactionReviewScreen(
     val creditCardPaymentCount = visibleTransactionsForCounts.count {
         it.accountingTreatment == TransactionTreatments.CREDIT_CARD_PAYMENT
     }
-    val filteredImpactCents = filteredTransactions.sumOf {
-        TransactionTreatments.spendingImpactCents(
-            treatment = it.accountingTreatment,
-            excludedFromSpending = it.excludedFromSpending,
-            amountCents = it.amountCents
-        )
-    }
+    val filteredImpactByCurrency = filteredTransactions
+        .groupBy { it.currency.uppercase(Locale.US) }
+        .mapValues { (_, group) ->
+            group.sumOf {
+                TransactionTreatments.spendingImpactCents(
+                    treatment = it.accountingTreatment,
+                    excludedFromSpending = it.excludedFromSpending,
+                    amountCents = it.amountCents
+                )
+            }
+        }
     val groupedTransactions = remember(filteredTransactions) {
         filteredTransactions.groupBy { activityDateHeaderLabel(it.occurredAtEpochMs) }
     }
@@ -256,7 +258,7 @@ fun TransactionReviewScreen(
         title = "Activity",
         activeScreen = AppScreen.TRANSACTIONS,
         onNavigate = onNavigate,
-        onQuickActions = onQuickActions,
+        onSyncSmsAlerts = onSyncSmsAlerts,
         onBack = onBack
     ) { padding ->
         LazyColumn(
@@ -302,7 +304,7 @@ fun TransactionReviewScreen(
             item {
                 ActivityListSummary(
                     filteredCount = filteredTransactions.size,
-                    filteredImpactCents = filteredImpactCents
+                    filteredImpactText = formatCurrencyTotals(filteredImpactByCurrency)
                 )
             }
 
@@ -450,7 +452,7 @@ fun ActivityFilterChip(
 @Composable
 fun ActivityListSummary(
     filteredCount: Int,
-    filteredImpactCents: Long
+    filteredImpactText: String
 ) {
     Row(
         modifier = Modifier
@@ -465,7 +467,7 @@ fun ActivityListSummary(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
-            text = "Net impact ${formatSignedMoney(filteredImpactCents)}",
+            text = "Net impact $filteredImpactText",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -624,12 +626,11 @@ fun activitySourceLabel(transaction: TransactionEntity): String {
 }
 
 fun activityAmountLabel(transaction: TransactionEntity): String {
-    val amount = "${'$'}${"%.2f".format(Locale.US, transaction.amountCents / 100.0)}"
     return when (transaction.accountingTreatment) {
-        TransactionTreatments.INCOME -> "+$amount"
+        TransactionTreatments.INCOME -> formatMoney(transaction.amountCents, transaction.currency, signed = true)
         TransactionTreatments.REFUND,
-        TransactionTreatments.REIMBURSEMENT -> "-$amount"
-        else -> amount
+        TransactionTreatments.REIMBURSEMENT -> formatMoney(-transaction.amountCents, transaction.currency, signed = true)
+        else -> formatMoney(transaction.amountCents, transaction.currency)
     }
 }
 
@@ -659,7 +660,6 @@ fun TransactionCard(
         SimpleDateFormat("MMM dd, yyyy h:mm a", Locale.getDefault())
     }
 
-    val amount = transaction.amountCents / 100.0
     val spendingImpact = TransactionTreatments.spendingImpactCents(
         treatment = transaction.accountingTreatment,
         excludedFromSpending = transaction.excludedFromSpending,
@@ -680,92 +680,18 @@ fun TransactionCard(
         supportingText = formatter.format(Date(transaction.occurredAtEpochMs)),
         metadataText = sourceText,
         pillText = treatmentLabel(transaction.accountingTreatment),
-        trailingText = "$${"%.2f".format(amount)}",
+        trailingText = formatMoney(transaction.amountCents, transaction.currency),
         trailingSupportingText = if (spendingImpact == 0L) {
             "Outside spending"
         } else {
-            "Impact ${formatSignedMoney(spendingImpact)}"
+            "Impact ${formatSignedMoney(spendingImpact, transaction.currency)}"
         },
         leadingText = transaction.displayMerchantName
             ?.take(1)
             ?: transaction.sourceInstitution?.take(1)
-            ?: "$",
+            ?: transaction.currency.take(1),
         onClick = onClick
     )
-    return
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp)
-        ) {
-            Text(
-                text = transaction.displayMerchantName
-                    ?: transaction.sourceInstitution
-                    ?: treatmentLabel(transaction.accountingTreatment),
-                style = MaterialTheme.typography.titleSmall
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "$${"%.2f".format(amount)} • ${treatmentLabel(transaction.accountingTreatment)}",
-                style = MaterialTheme.typography.bodyMedium
-            )
-
-            Text(
-                text = formatter.format(Date(transaction.occurredAtEpochMs)),
-                style = MaterialTheme.typography.labelSmall
-            )
-
-            val sourceText = listOfNotNull(
-                transaction.sourceInstitution,
-                transaction.accountHint?.let { "Hint $it" }
-            ).joinToString(" • ")
-
-            if (sourceText.isNotBlank()) {
-                Text(
-                    text = sourceText,
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
-
-            Text(
-                text = "Review: ${transaction.reviewStatus}",
-                style = MaterialTheme.typography.labelSmall
-            )
-
-            Text(
-                text = "Confidence: ${"%.0f".format(transaction.parseConfidence * 100)}%",
-                style = MaterialTheme.typography.labelSmall
-            )
-
-            if (transaction.excludedFromSpending) {
-                Text(
-                    text = "Tracked outside Spending Summary",
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
-
-            if (!transaction.parserNotes.isNullOrBlank()) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = transaction.parserNotes,
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "Tap for details",
-                style = MaterialTheme.typography.labelSmall
-            )
-        }
-    }
 }
 
 @Composable

@@ -66,15 +66,29 @@ class LedgerNavigationTest {
     }
 
     @Test
-    fun backFromNonDefaultScreenReturnsSpending() {
+    fun backFromRootActivityExitsApp() {
         assertEquals(
-            LedgerBackAction.GO_SPENDING,
+            LedgerBackAction.EXIT_APP,
             resolveLedgerBackAction(
                 showSheet = false,
                 hasSelectedTransaction = false,
                 hasSelectedSource = false,
                 hasSelectedMerchant = false,
                 activeScreen = AppScreen.TRANSACTIONS
+            )
+        )
+    }
+
+    @Test
+    fun backFromNestedMoreScreenReturnsMore() {
+        assertEquals(
+            LedgerBackAction.GO_MORE,
+            resolveLedgerBackAction(
+                showSheet = false,
+                hasSelectedTransaction = false,
+                hasSelectedSource = false,
+                hasSelectedMerchant = false,
+                activeScreen = AppScreen.SOURCES
             )
         )
     }

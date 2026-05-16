@@ -5,16 +5,18 @@ import android.provider.Telephony
 import android.util.Log
 import com.example.ledgerlens.data.dao.RawAlertDao
 import com.example.ledgerlens.data.entity.RawAlertEntity
-import java.util.Locale
+import com.example.ledgerlens.domain.parser.FinancialSmsClassifier
+import com.example.ledgerlens.domain.parser.RawAlertStatus
+import com.example.ledgerlens.domain.sync.SmsImportResult
+import com.example.ledgerlens.domain.sync.SmsMessageImporter
 
 class AndroidSmsImporter(
     private val contentResolver: ContentResolver,
     private val rawAlertDao: RawAlertDao
-) {
+) : SmsMessageImporter {
 
-    suspend fun importFinanceSmsMessages(daysBack: Int): Int {
+    override suspend fun importFinanceSmsMessages(sinceEpochMs: Long): SmsImportResult {
         val now = System.currentTimeMillis()
-        val startDate = now - (daysBack * 24L * 60L * 60L * 1000L)
 
         val projection = arrayOf(
             Telephony.Sms._ID,
@@ -25,7 +27,7 @@ class AndroidSmsImporter(
         )
 
         val selection = "${Telephony.Sms.DATE} >= ?"
-        val selectionArgs = arrayOf(startDate.toString())
+        val selectionArgs = arrayOf(sinceEpochMs.toString())
         val sortOrder = "${Telephony.Sms.DATE} DESC"
 
         var importedCount = 0
@@ -55,7 +57,11 @@ class AndroidSmsImporter(
                 val date = cursor.getLong(dateIndex)
                 val type = cursor.getInt(typeIndex)
 
-                if (!looksLikeFinancialSms(body)) {
+                if (!AndroidSmsImportFilters.isInboxSmsType(type)) {
+                    continue
+                }
+
+                if (!FinancialSmsClassifier.looksFinancial(body)) {
                     continue
                 }
 
@@ -78,7 +84,7 @@ class AndroidSmsImporter(
                         combinedText = body,
                         postTimeEpochMs = date,
                         capturedAtEpochMs = now,
-                        processingStatus = "IMPORTED_SMS"
+                        processingStatus = RawAlertStatus.IMPORTED_SMS
                     )
                 )
                 importedCount++
@@ -87,50 +93,20 @@ class AndroidSmsImporter(
 
         Log.d(
             "LedgerLensSmsImport",
-            "daysBack=$daysBack scanned=$scannedCount financeLooking=$financeLookingCount duplicates=$duplicateCount imported=$importedCount"
+            "sinceEpochMs=$sinceEpochMs scanned=$scannedCount financeLooking=$financeLookingCount duplicates=$duplicateCount imported=$importedCount"
         )
 
-        return importedCount
+        return SmsImportResult(
+            scannedCount = scannedCount,
+            financeLookingCount = financeLookingCount,
+            importedCount = importedCount,
+            duplicateCount = duplicateCount
+        )
     }
+}
 
-    private fun looksLikeFinancialSms(body: String): Boolean {
-        val lower = body.lowercase(Locale.US)
-        val hasMoneyAmount = Regex(
-            pattern = """(\$|usd\s*)?\d{1,3}(,\d{3})*(\.\d{2})"""
-        ).containsMatchIn(lower)
-
-        val financeKeywords = listOf(
-            "spent",
-            "purchase",
-            "transaction",
-            "charged",
-            "charge",
-            "debit",
-            "debited",
-            "credit",
-            "credited",
-            "deposit",
-            "withdrawal",
-            "payment",
-            "paid",
-            "balance",
-            "card",
-            "account",
-            "atm",
-            "pos",
-            "zelle",
-            "venmo",
-            "cash app",
-            "bank",
-            "alert",
-            "autopay",
-            "refund",
-            "authorized",
-            "authorization",
-            "available balance",
-            "ending in"
-        )
-
-        return hasMoneyAmount && financeKeywords.any { lower.contains(it) }
+object AndroidSmsImportFilters {
+    fun isInboxSmsType(type: Int): Boolean {
+        return type == Telephony.Sms.MESSAGE_TYPE_INBOX
     }
 }

@@ -12,7 +12,8 @@ data class CategorySpendSummary(
     val amountCents: Long,
     val transactionCount: Int,
     val grossExpenseCents: Long = 0,
-    val refundOffsetCents: Long = 0
+    val refundOffsetCents: Long = 0,
+    val currency: String = "USD"
 )
 
 data class MerchantSummary(
@@ -23,7 +24,8 @@ data class MerchantSummary(
     val primaryTreatment: String,
     val categoryName: String?,
     val uncategorizedCount: Int,
-    val latestTransactionEpochMs: Long
+    val latestTransactionEpochMs: Long,
+    val currency: String = "USD"
 )
 
 const val VIRTUAL_UNCATEGORIZED_CATEGORY = "Uncategorized"
@@ -80,7 +82,7 @@ fun categorySpendSummaries(transactions: List<TransactionEntity>): List<Category
                 excludedFromSpending = it.excludedFromSpending
             )
         }
-        .groupBy { displayCategoryName(it.categoryName) }
+        .groupBy { displayCategoryName(it.categoryName) to normalizedCurrency(it.currency) }
         .map { (key, group) ->
             val impacts = group.map {
                 TransactionTreatments.spendingImpactCents(
@@ -90,11 +92,12 @@ fun categorySpendSummaries(transactions: List<TransactionEntity>): List<Category
                 )
             }
             CategorySpendSummary(
-                categoryName = key,
+                categoryName = key.first,
                 amountCents = impacts.sumOf { it },
                 transactionCount = group.size,
                 grossExpenseCents = impacts.filter { it > 0 }.sumOf { it },
-                refundOffsetCents = impacts.filter { it < 0 }.sumOf { -it }
+                refundOffsetCents = impacts.filter { it < 0 }.sumOf { -it },
+                currency = key.second
             )
         }
         .sortedByDescending { kotlin.math.abs(it.amountCents) }
@@ -108,9 +111,11 @@ fun merchantSummaries(transactions: List<TransactionEntity>): List<MerchantSumma
                     !it.merchantRaw.isNullOrBlank()
         }
         .groupBy {
-            merchantSummaryName(it)
+            merchantSummaryName(it) to normalizedCurrency(it.currency)
         }
-        .map { (merchantName, group) ->
+        .map { (key, group) ->
+            val merchantName = key.first
+            val currency = key.second
             val spendingGroup = group.filter {
                 TransactionTreatments.isInSpendingView(
                     treatment = it.accountingTreatment,
@@ -157,7 +162,8 @@ fun merchantSummaries(transactions: List<TransactionEntity>): List<MerchantSumma
                     ) &&
                             isVirtualUncategorizedCategory(it.categoryName)
                 },
-                latestTransactionEpochMs = group.maxOf { it.occurredAtEpochMs }
+                latestTransactionEpochMs = group.maxOf { it.occurredAtEpochMs },
+                currency = currency
             )
         }
         .sortedWith(
@@ -167,6 +173,41 @@ fun merchantSummaries(transactions: List<TransactionEntity>): List<MerchantSumma
                 .thenByDescending { it.transactionCount }
                 .thenBy { it.merchantName.lowercase(Locale.US) }
         )
+}
+
+fun spendingImpactByCurrency(transactions: List<TransactionEntity>): Map<String, Long> {
+    return transactions
+        .filter {
+            TransactionTreatments.isInSpendingView(
+                treatment = it.accountingTreatment,
+                excludedFromSpending = it.excludedFromSpending
+            )
+        }
+        .groupBy { normalizedCurrency(it.currency) }
+        .mapValues { (_, group) ->
+            group.sumOf {
+                TransactionTreatments.spendingImpactCents(
+                    treatment = it.accountingTreatment,
+                    excludedFromSpending = it.excludedFromSpending,
+                    amountCents = it.amountCents
+                )
+            }
+        }
+}
+
+fun singleCurrencyOrNull(transactions: List<TransactionEntity>): String? {
+    return transactions
+        .map { normalizedCurrency(it.currency) }
+        .distinct()
+        .singleOrNull()
+}
+
+fun normalizedCurrency(currency: String?): String {
+    return currency
+        ?.trim()
+        ?.uppercase(Locale.US)
+        ?.ifBlank { null }
+        ?: "USD"
 }
 
 fun merchantSummaryName(transaction: TransactionEntity): String {

@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <external-files-path
-        name="ledgerlens_exports"
-        path="." />
+        name="ledgerlens_transaction_exports"
+        path="Documents/exports/" />
+    <external-files-path
+        name="ledgerlens_parser_diagnostics"
+        path="Documents/parser-diagnostics/" />
 </paths>

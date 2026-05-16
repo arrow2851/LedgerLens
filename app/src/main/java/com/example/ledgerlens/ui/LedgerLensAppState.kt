@@ -57,6 +57,7 @@ enum class LedgerBackAction {
     CLOSE_SOURCE_DETAIL,
     CLOSE_MERCHANT_DETAIL,
     GO_REVIEW,
+    GO_MORE,
     GO_SPENDING,
     EXIT_APP
 }
@@ -74,7 +75,7 @@ fun resolveLedgerBackAction(
         hasSelectedSource -> LedgerBackAction.CLOSE_SOURCE_DETAIL
         hasSelectedMerchant -> LedgerBackAction.CLOSE_MERCHANT_DETAIL
         activeScreen == AppScreen.MERCHANTS -> LedgerBackAction.GO_REVIEW
-        activeScreen != AppScreen.SUMMARY -> LedgerBackAction.GO_SPENDING
+        activeScreen == AppScreen.SOURCES || activeScreen == AppScreen.RULES -> LedgerBackAction.GO_MORE
         else -> LedgerBackAction.EXIT_APP
     }
 }

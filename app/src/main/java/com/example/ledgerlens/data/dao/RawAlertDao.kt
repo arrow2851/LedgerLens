@@ -50,4 +50,25 @@ interface RawAlertDao {
     WHERE id = :rawAlertId
 """)
     suspend fun updateProcessingStatus(rawAlertId: Long, status: String)
+
+    @Query("""
+    UPDATE raw_alerts
+    SET processingStatus = :status,
+        ignoreReason = :ignoreReason
+    WHERE id = :rawAlertId
+""")
+    suspend fun updateProcessingStatus(
+        rawAlertId: Long,
+        status: String,
+        ignoreReason: String?
+    )
+
+    @Query("""
+    UPDATE raw_alerts
+    SET text = :placeholder,
+        bigText = NULL,
+        combinedText = :placeholder
+    WHERE id = :rawAlertId
+""")
+    suspend fun redactStoredSmsText(rawAlertId: Long, placeholder: String)
 }

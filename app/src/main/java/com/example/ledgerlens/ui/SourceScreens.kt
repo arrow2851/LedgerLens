@@ -1,4 +1,4 @@
-ï»¿package com.example.ledgerlens.ui
+package com.example.ledgerlens.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
@@ -96,8 +96,6 @@ import com.example.ledgerlens.ui.components.ListSectionHeader
 import com.example.ledgerlens.ui.components.MetricPanel
 import com.example.ledgerlens.ui.components.MetricTile
 import com.example.ledgerlens.ui.components.MiniTrendStrip
-import com.example.ledgerlens.ui.components.QuickActionItem
-import com.example.ledgerlens.ui.components.QuickActionSheet
 import com.example.ledgerlens.ui.components.StatStrip
 import com.example.ledgerlens.ui.components.StatStripItem
 import com.example.ledgerlens.ui.components.TreatmentChip
@@ -147,7 +145,7 @@ fun SourceListScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Sources") },
+                title = { Text("Banks & cards") },
                 navigationIcon = {
                     TextButton(onClick = onBack) {
                         Text("Back")
@@ -168,7 +166,7 @@ fun SourceListScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = "Review SMS senders and classify them as identified sources, non-sources, or uncategorized possible sources.",
+                    text = "Choose which SMS senders LedgerLens should use for banks, cards, and financial alerts.",
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
@@ -177,7 +175,7 @@ fun SourceListScreen(
                 OutlinedTextField(
                     value = searchText,
                     onValueChange = { searchText = it },
-                    label = { Text("Search sources") },
+                    label = { Text("Search senders") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
@@ -185,14 +183,14 @@ fun SourceListScreen(
 
             item {
                 SourceSectionHeader(
-                    title = "Uncategorized Possible Sources",
+                    title = "Needs review",
                     count = uncategorizedSources.size
                 )
             }
 
             if (uncategorizedSources.isEmpty()) {
                 item {
-                    EmptySectionText("No uncategorized possible sources.")
+                    EmptySectionText("No senders need review.")
                 }
             } else {
                 items(
@@ -201,7 +199,7 @@ fun SourceListScreen(
                 ) { source ->
                     SourceCompactCard(
                         source = source,
-                        categoryLabel = "Uncategorized",
+                        categoryLabel = "Needs review",
                         onClick = { onSourceSelected(source) }
                     )
                 }
@@ -209,14 +207,14 @@ fun SourceListScreen(
 
             item {
                 SourceSectionHeader(
-                    title = "Identified Sources",
+                    title = "Used by LedgerLens",
                     count = identifiedSources.size
                 )
             }
 
             if (identifiedSources.isEmpty()) {
                 item {
-                    EmptySectionText("No identified sources yet.")
+                    EmptySectionText("No approved senders yet.")
                 }
             } else {
                 items(
@@ -225,7 +223,7 @@ fun SourceListScreen(
                 ) { source ->
                     SourceCompactCard(
                         source = source,
-                        categoryLabel = "Identified",
+                        categoryLabel = "Used",
                         onClick = { onSourceSelected(source) }
                     )
                 }
@@ -233,14 +231,14 @@ fun SourceListScreen(
 
             item {
                 SourceSectionHeader(
-                    title = "Non-Sources",
+                    title = "Ignored senders",
                     count = nonSources.size
                 )
             }
 
             if (nonSources.isEmpty()) {
                 item {
-                    EmptySectionText("No non-sources yet.")
+                    EmptySectionText("No ignored senders yet.")
                 }
             } else {
                 items(
@@ -249,7 +247,7 @@ fun SourceListScreen(
                 ) { source ->
                     SourceCompactCard(
                         source = source,
-                        categoryLabel = "Non-Source",
+                        categoryLabel = "Ignored",
                         onClick = { onSourceSelected(source) }
                     )
                 }
@@ -289,11 +287,9 @@ fun SourceCompactCard(
         ?: source.suggestedAccountType
 
     LedgerListRow(
-        title = source.displayName
-            ?: source.institutionName
-            ?: "Unknown financial source",
-        supportingText = "$categoryLabel - Type: $effectiveType - Messages: ${source.messageCount}",
-        metadataText = "Sender ${source.sourceAddress} - ${"%.0f".format(source.detectionConfidence * 100)}% confidence",
+        title = sourceDisplayName(source),
+        supportingText = "$categoryLabel - ${accountTypeLabel(effectiveType)} - ${source.messageCount} messages",
+        metadataText = "Sender ${source.sourceAddress}",
         pillText = categoryLabel,
         leadingText = source.sourceAddress.take(2),
         trailingText = "Review",
@@ -319,7 +315,7 @@ fun SourceCompactCard(
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                text = "$categoryLabel â€¢ Type: $effectiveType â€¢ Messages: ${source.messageCount}",
+                text = "$categoryLabel • Type: $effectiveType • Messages: ${source.messageCount}",
                 style = MaterialTheme.typography.bodyMedium
             )
 
@@ -368,7 +364,7 @@ fun SourceDetailScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Source Detail") },
+                title = { Text("Sender details") },
                 navigationIcon = {
                     TextButton(onClick = onBack) {
                         Text("Back")
@@ -405,7 +401,7 @@ fun SourceDetailScreen(
 
             item {
                 Text(
-                    text = "Matching SMS (${matchingAlerts.size})",
+                    text = "Message samples (${matchingAlerts.size})",
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(top = 8.dp)
                 )
@@ -413,7 +409,7 @@ fun SourceDetailScreen(
 
             if (matchingAlerts.isEmpty()) {
                 item {
-                    EmptySectionText("No matching SMS found for this source.")
+                    EmptySectionText("No matching messages found for this sender.")
                 }
             } else {
                 items(
@@ -450,35 +446,33 @@ fun SourceDetailSummaryCard(
             modifier = Modifier.padding(12.dp)
         ) {
             Text(
-                text = source.displayName
-                    ?: source.institutionName
-                    ?: "Unknown financial source",
+                text = sourceDisplayName(source),
                 style = MaterialTheme.typography.titleMedium
             )
 
             Spacer(modifier = Modifier.height(6.dp))
 
             Text("Sender: ${source.sourceAddress}")
-            Text("Suggested type: ${source.suggestedAccountType}")
-            Text("Confirmed type: ${source.confirmedAccountType ?: "Not confirmed"}")
-            Text("Effective type: $effectiveType")
-            Text("Matching SMS: $matchingCount")
+            Text("Suggested type: ${accountTypeLabel(source.suggestedAccountType)}")
+            Text("Chosen type: ${source.confirmedAccountType?.let { accountTypeLabel(it) } ?: "Not chosen"}")
+            Text("Using as: ${accountTypeLabel(effectiveType)}")
+            Text("Matching messages: $matchingCount")
 
             if (!source.accountHint.isNullOrBlank()) {
                 Text("Detected account/card hints: ${source.accountHint}")
             }
 
-            Text("Confidence: ${"%.0f".format(source.detectionConfidence * 100)}%")
+            Text("Detection confidence: ${"%.0f".format(source.detectionConfidence * 100)}%")
             Text("First seen: ${formatter.format(Date(source.firstSeenEpochMs))}")
             Text("Last seen: ${formatter.format(Date(source.lastSeenEpochMs))}")
 
             val category = when {
-                source.ignored -> "Non-Source"
-                source.userConfirmed -> "Identified Source"
-                else -> "Uncategorized Possible Source"
+                source.ignored -> "Ignored sender"
+                source.userConfirmed -> "Used by LedgerLens"
+                else -> "Needs review"
             }
 
-            Text("Current category: $category")
+            Text("Current status: $category")
         }
     }
 }
@@ -499,7 +493,7 @@ fun SourceActionCard(
             modifier = Modifier.padding(12.dp)
         ) {
             Text(
-                text = "Choose Source Category",
+                text = "Should LedgerLens use this sender?",
                 style = MaterialTheme.typography.titleSmall
             )
 
@@ -551,7 +545,7 @@ fun SourceActionCard(
                 onClick = { onMarkSourceType("UNKNOWN") },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Valid Source, Type Unknown")
+                Text("Use this sender")
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -560,7 +554,7 @@ fun SourceActionCard(
                 onClick = onDismissAsNonSource,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Dismiss as Non-Source")
+                Text("Ignore this sender")
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -569,7 +563,7 @@ fun SourceActionCard(
                 onClick = onMoveToUncategorized,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Move Back to Uncategorized")
+                Text("Move back to review")
             }
         }
     }
@@ -595,7 +589,7 @@ fun SmsMessageCard(
             )
 
             Text(
-                text = "Status: ${alert.processingStatus}",
+                text = "Status: ${rawAlertStatusLabel(alert.processingStatus)}",
                 style = MaterialTheme.typography.labelSmall
             )
 
@@ -606,6 +600,36 @@ fun SmsMessageCard(
                 style = MaterialTheme.typography.bodyMedium
             )
         }
+    }
+}
+
+fun accountTypeLabel(type: String): String {
+    return when (type) {
+        "CREDIT_CARD" -> "Credit card"
+        "DEBIT_CARD" -> "Debit card"
+        "CHECKING" -> "Checking"
+        "SAVINGS" -> "Savings"
+        "MIXED" -> "Mixed alerts"
+        "UNKNOWN" -> "Not sure yet"
+        else -> type.lowercase(Locale.US).replace("_", " ")
+            .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString() }
+    }
+}
+
+fun sourceDisplayName(source: FinancialSourceEntity): String {
+    return (source.displayName ?: source.institutionName ?: "Financial sender")
+        .replace("â€¢", "-")
+        .replace("•", "-")
+}
+
+fun rawAlertStatusLabel(status: String): String {
+    return when (status) {
+        "IMPORTED_SMS", "SOURCE_PENDING", "PARSE_PENDING" -> "Waiting"
+        "PARSED_TRANSACTION" -> "Transaction created"
+        "IGNORED_NON_TRANSACTION" -> "Info alert"
+        "FAILED_TRANSACTION_PARSE" -> "Needs troubleshooting"
+        "SOURCE_IGNORED" -> "Ignored sender"
+        else -> "Waiting"
     }
 }
 

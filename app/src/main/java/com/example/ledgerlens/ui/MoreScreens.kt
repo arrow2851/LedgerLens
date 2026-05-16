@@ -1,4 +1,4 @@
-﻿package com.example.ledgerlens.ui
+package com.example.ledgerlens.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
@@ -60,6 +60,7 @@ import com.example.ledgerlens.domain.parser.detectAndSaveSources
 import com.example.ledgerlens.domain.parser.parseIdentifiedSourceTransactions
 import com.example.ledgerlens.domain.parser.reapplySavedRulesToExistingTransactions
 import com.example.ledgerlens.domain.parser.updateRawAlertStatusesForSource
+import com.example.ledgerlens.domain.privacy.RawSmsRetention
 import com.example.ledgerlens.domain.rules.MERCHANT_DEFAULT_RULE_SOURCE_KEY
 import com.example.ledgerlens.domain.rules.MerchantAliasApplyResult
 import com.example.ledgerlens.domain.rules.MerchantAliasRuleDraft
@@ -96,8 +97,6 @@ import com.example.ledgerlens.ui.components.ListSectionHeader
 import com.example.ledgerlens.ui.components.MetricPanel
 import com.example.ledgerlens.ui.components.MetricTile
 import com.example.ledgerlens.ui.components.MiniTrendStrip
-import com.example.ledgerlens.ui.components.QuickActionItem
-import com.example.ledgerlens.ui.components.QuickActionSheet
 import com.example.ledgerlens.ui.components.StatStrip
 import com.example.ledgerlens.ui.components.StatStripItem
 import com.example.ledgerlens.ui.components.TreatmentChip
@@ -120,7 +119,7 @@ fun ToolsScreen(
     transactions: List<TransactionEntity>,
     statusText: String,
     onNavigate: (AppScreen) -> Unit,
-    onQuickActions: () -> Unit,
+    onSyncSmsAlerts: () -> Unit,
     onBack: () -> Unit,
     onOpenSources: () -> Unit,
     onOpenRules: () -> Unit,
@@ -132,13 +131,19 @@ fun ToolsScreen(
     onReparseTransactions: () -> Unit,
     onReapplySavedRules: () -> Unit,
     onExportTransactions: () -> Unit,
-    onExportParserCorpus: () -> Unit,
+    onExportParserDiagnostics: () -> Unit,
+    rawSmsRetention: RawSmsRetention,
+    onRawSmsRetentionChanged: (RawSmsRetention) -> Unit,
+    onDeleteExportedFiles: () -> Unit,
     onClearAll: () -> Unit
 ) {
     var showCategories by remember { mutableStateOf(false) }
     var showMerchants by remember { mutableStateOf(false) }
     var showAdvancedTools by remember { mutableStateOf(false) }
+    var showPrivacy by remember { mutableStateOf(false) }
+    var showHelp by remember { mutableStateOf(false) }
     var confirmClearAll by remember { mutableStateOf(false) }
+    var confirmParserDiagnosticsExport by remember { mutableStateOf(false) }
 
     val categoryItems = remember(transactions) {
         transactions
@@ -155,18 +160,24 @@ fun ToolsScreen(
                 val categoryTransactions = transactions.filter {
                     it.categoryName?.equals(category, ignoreCase = true) == true
                 }
-                MoreCategorySummary(
-                    name = category,
-                    transactionCount = categoryTransactions.size,
-                    spendingImpactCents = categoryTransactions.sumOf {
-                        TransactionTreatments.spendingImpactCents(
-                            treatment = it.accountingTreatment,
-                            excludedFromSpending = it.excludedFromSpending,
-                            amountCents = it.amountCents
+                categoryTransactions
+                    .groupBy { it.currency.uppercase(Locale.US) }
+                    .map { (currency, currencyTransactions) ->
+                        MoreCategorySummary(
+                            name = category,
+                            currency = currency,
+                            transactionCount = currencyTransactions.size,
+                            spendingImpactCents = currencyTransactions.sumOf {
+                                TransactionTreatments.spendingImpactCents(
+                                    treatment = it.accountingTreatment,
+                                    excludedFromSpending = it.excludedFromSpending,
+                                    amountCents = it.amountCents
+                                )
+                            }
                         )
                     }
-                )
             }
+            .flatten()
             .sortedWith(
                 compareByDescending<MoreCategorySummary> { kotlin.math.abs(it.spendingImpactCents) }
                     .thenBy { it.name.lowercase(Locale.US) }
@@ -180,7 +191,7 @@ fun ToolsScreen(
         title = "More",
         activeScreen = AppScreen.TOOLS,
         onNavigate = onNavigate,
-        onQuickActions = onQuickActions
+        onSyncSmsAlerts = onSyncSmsAlerts
     ) { padding ->
         LazyColumn(
             modifier = Modifier
@@ -222,15 +233,15 @@ fun ToolsScreen(
                     MoreDivider()
                     MoreActionRow(
                         leadingText = "S",
-                        title = "SMS Sources",
-                        supportingText = "Review senders that LedgerLens can parse.",
+                        title = "Banks & cards",
+                        supportingText = "Choose which SMS senders LedgerLens should use.",
                         onClick = onOpenSources
                     )
                     MoreDivider()
                     MoreActionRow(
                         leadingText = "R",
-                        title = "Rules",
-                        supportingText = "Manage saved merchant defaults and parser aliases.",
+                        title = "Saved rules",
+                        supportingText = "Advanced merchant defaults and parser aliases.",
                         trailingText = activeRuleCount.toString(),
                         onClick = onOpenRules
                     )
@@ -247,8 +258,8 @@ fun ToolsScreen(
                                 MoreActionRow(
                                     leadingText = categoryGlyph(category.name),
                                     title = category.name,
-                                    supportingText = "${category.transactionCount} transactions",
-                                    trailingText = formatSignedMoney(category.spendingImpactCents),
+                                    supportingText = "${category.transactionCount} transactions - ${category.currency}",
+                                    trailingText = formatSignedMoney(category.spendingImpactCents, category.currency),
                                     onClick = null
                                 )
                                 if (index < categoryItems.take(12).lastIndex) {
@@ -270,8 +281,8 @@ fun ToolsScreen(
                                 MoreActionRow(
                                     leadingText = merchant.merchantName.take(1).uppercase(Locale.US),
                                     title = merchant.merchantName,
-                                    supportingText = "${merchant.transactionCount} transactions",
-                                    trailingText = formatSignedMoney(merchant.spendingAmountCents),
+                                    supportingText = "${merchant.transactionCount} transactions - ${merchant.currency}",
+                                    trailingText = formatSignedMoney(merchant.spendingAmountCents, merchant.currency),
                                     onClick = { onMerchantSelected(merchant) }
                                 )
                                 if (index < merchantItems.take(12).lastIndex) {
@@ -287,24 +298,10 @@ fun ToolsScreen(
                 MoreSectionHeader("Import & Export")
                 MoreSectionCard {
                     MoreActionRow(
-                        leadingText = "I",
-                        title = "Import via SMS",
-                        supportingText = "Import alerts, then review detected senders in Sources.",
+                        leadingText = "S",
+                        title = "Sync SMS alerts",
+                        supportingText = "Import new financial SMS alerts and update transactions.",
                         onClick = onRefreshLatestSms
-                    )
-                    MoreDivider()
-                    MoreActionRow(
-                        leadingText = "N",
-                        title = "Refresh latest SMS",
-                        supportingText = "Import new financial SMS messages.",
-                        onClick = onRefreshLatestSms
-                    )
-                    MoreDivider()
-                    MoreActionRow(
-                        leadingText = "H",
-                        title = "Backfill SMS history",
-                        supportingText = "Import older financial SMS messages.",
-                        onClick = onBackfillSmsHistory
                     )
                     MoreDivider()
                     MoreActionRow(
@@ -313,30 +310,40 @@ fun ToolsScreen(
                         supportingText = "Share a CSV of your transaction data.",
                         onClick = onExportTransactions
                     )
-                    MoreDivider()
+                }
+            }
+
+            item {
+                MoreSectionHeader("Privacy")
+                MoreSectionCard {
                     MoreActionRow(
                         leadingText = "P",
-                        title = "Export parser examples",
-                        supportingText = "Share local SMS examples for improving merchant parsing.",
-                        onClick = onExportParserCorpus
+                        title = "Privacy & security",
+                        supportingText = "Message text and transactions stay local on this device.",
+                        trailingText = if (showPrivacy) "Hide" else ">",
+                        onClick = { showPrivacy = !showPrivacy }
+                    )
+                }
+            }
+
+            if (showPrivacy) {
+                item {
+                    PrivacyPanel(
+                        rawSmsRetention = rawSmsRetention,
+                        onRawSmsRetentionChanged = onRawSmsRetentionChanged,
+                        onDeleteExportedFiles = onDeleteExportedFiles,
+                        onDeleteAllData = { confirmClearAll = true }
                     )
                 }
             }
 
             item {
-                MoreSectionHeader("Tools")
+                MoreSectionHeader("Advanced")
                 MoreSectionCard {
                     MoreActionRow(
                         leadingText = "A",
-                        title = "Reapply saved rules",
-                        supportingText = "Update existing transactions using your saved rules.",
-                        onClick = onReapplySavedRules
-                    )
-                    MoreDivider()
-                    MoreActionRow(
-                        leadingText = "D",
                         title = "Advanced tools",
-                        supportingText = "Source detection, reprocessing, and diagnostics.",
+                        supportingText = "Full history sync, reprocessing, rules, diagnostics, and deletion.",
                         trailingText = if (showAdvancedTools) "Hide" else ">",
                         onClick = { showAdvancedTools = !showAdvancedTools }
                     )
@@ -347,25 +354,85 @@ fun ToolsScreen(
                 item {
                     MoreSectionCard {
                         MoreActionRow(
+                            leadingText = "H",
+                            title = "Full SMS history sync",
+                            supportingText = "Import older financial SMS messages, then update senders and transactions.",
+                            onClick = onBackfillSmsHistory
+                        )
+                        MoreDivider()
+                        MoreActionRow(
                             leadingText = "F",
-                            title = "Detect SMS sources",
+                            title = "Detect banks & cards",
                             supportingText = "Find possible financial SMS senders from imported messages.",
                             onClick = onDetectSources
                         )
                         MoreDivider()
                         MoreActionRow(
                             leadingText = "P",
-                            title = "Process approved sources",
-                            supportingText = "Parse transactions from sources you approved.",
+                            title = "Process approved senders",
+                            supportingText = "Parse transactions from senders you approved.",
                             onClick = onParseIdentifiedSources
                         )
                         MoreDivider()
                         MoreActionRow(
+                            leadingText = "A",
+                            title = "Reapply saved rules",
+                            supportingText = "Update existing transactions using saved rules without overwriting manual edits.",
+                            onClick = onReapplySavedRules
+                        )
+                        MoreDivider()
+                        MoreActionRow(
                             leadingText = "B",
-                            title = "Rebuild transactions",
-                            supportingText = "Recreate parsed transactions using current parser and rules.",
+                            title = "Reprocess approved senders",
+                            supportingText = "Update parser-owned details while preserving your manual edits.",
                             onClick = onReparseTransactions
                         )
+                        MoreDivider()
+                        if (confirmParserDiagnosticsExport) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "Export parser diagnostics?",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "This advanced export is redacted by default, but it still may include merchants, balances, account/card hints, sender IDs, and other financial details.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = { confirmParserDiagnosticsExport = false },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Cancel")
+                                    }
+                                    Button(
+                                        onClick = {
+                                            confirmParserDiagnosticsExport = false
+                                            onExportParserDiagnostics()
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Export")
+                                    }
+                                }
+                            }
+                        } else {
+                            MoreActionRow(
+                                leadingText = "D",
+                                title = "Export parser diagnostics",
+                                supportingText = "Advanced troubleshooting export. Raw SMS text is redacted by default.",
+                                trailingText = "Warn",
+                                onClick = { confirmParserDiagnosticsExport = true }
+                            )
+                        }
                         MoreDivider()
                         if (confirmClearAll) {
                             Column(
@@ -373,12 +440,12 @@ fun ToolsScreen(
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Text(
-                                    text = "Clear local test data?",
+                                    text = "Delete all LedgerLens data?",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
                                 )
                                 Text(
-                                    text = "This removes imported SMS, sources, rules, and transactions from this local database.",
+                                    text = "Removes $rawAlertCount imported SMS alerts, $transactionCount transactions, $sourceCount banks/cards, and $activeRuleCount rules from this device. This cannot be undone.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -399,15 +466,15 @@ fun ToolsScreen(
                                         },
                                         modifier = Modifier.weight(1f)
                                     ) {
-                                        Text("Clear")
+                                        Text("Delete")
                                     }
                                 }
                             }
                         } else {
                             MoreActionRow(
                                 leadingText = "X",
-                                title = "Clear local test data",
-                                supportingText = "Remove imported SMS, sources, rules, and transactions.",
+                                title = "Delete all LedgerLens data",
+                                supportingText = "Removes imported alerts, transactions, banks/cards, rules, and local app data from this device.",
                                 trailingText = "Confirm",
                                 onClick = { confirmClearAll = true }
                             )
@@ -420,36 +487,18 @@ fun ToolsScreen(
                 MoreSectionHeader("App")
                 MoreSectionCard {
                     MoreActionRow(
-                        leadingText = "S",
-                        title = "Settings",
-                        supportingText = "Preferences will live here as the app grows.",
-                        trailingText = "",
-                        onClick = null
-                    )
-                    MoreDivider()
-                    MoreActionRow(
-                        leadingText = "L",
-                        title = "Privacy & security",
-                        supportingText = "Your SMS and transaction data stay on this device.",
-                        trailingText = "",
-                        onClick = null
-                    )
-                    MoreDivider()
-                    MoreActionRow(
                         leadingText = "?",
                         title = "Help",
-                        supportingText = "LedgerLens is still a local personal app.",
-                        trailingText = "",
-                        onClick = null
+                        supportingText = "How sync, review, spending, and exports work.",
+                        trailingText = if (showHelp) "Hide" else ">",
+                        onClick = { showHelp = !showHelp }
                     )
-                    MoreDivider()
-                    MoreActionRow(
-                        leadingText = "i",
-                        title = "App information",
-                        supportingText = "Package com.example.ledgerlens.",
-                        trailingText = "",
-                        onClick = null
-                    )
+                }
+            }
+
+            if (showHelp) {
+                item {
+                    HelpPanel()
                 }
             }
         }
@@ -458,9 +507,86 @@ fun ToolsScreen(
 
 data class MoreCategorySummary(
     val name: String,
+    val currency: String,
     val transactionCount: Int,
     val spendingImpactCents: Long
 )
+
+@Composable
+fun PrivacyPanel(
+    rawSmsRetention: RawSmsRetention,
+    onRawSmsRetentionChanged: (RawSmsRetention) -> Unit,
+    onDeleteExportedFiles: () -> Unit,
+    onDeleteAllData: () -> Unit
+) {
+    MoreSectionCard {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "Privacy & security",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+            )
+            MoreBodyText("LedgerLens stores SMS alerts, parsed transactions, banks/cards, and rules locally on this device. Android backup is disabled for this app.")
+            MoreBodyText("Transaction CSV exports do not include original SMS text. Parser diagnostics are advanced exports and are redacted by default.")
+            MoreBodyText("Delete all data removes imported alerts, transactions, banks/cards, and rules from this device.")
+
+            MoreDivider()
+            MoreBodyText("Original SMS text")
+            MoreActionRow(
+                leadingText = if (rawSmsRetention == RawSmsRetention.KEEP_FOR_AUDIT) "✓" else "",
+                title = "Keep for audit/debugging",
+                supportingText = "Transaction detail can show the message LedgerLens used.",
+                onClick = { onRawSmsRetentionChanged(RawSmsRetention.KEEP_FOR_AUDIT) }
+            )
+            MoreDivider()
+            MoreActionRow(
+                leadingText = if (rawSmsRetention == RawSmsRetention.REDACT_AFTER_PARSE) "✓" else "",
+                title = "Redact after successful parse",
+                supportingText = "Replace stored original SMS text after a transaction is created.",
+                onClick = { onRawSmsRetentionChanged(RawSmsRetention.REDACT_AFTER_PARSE) }
+            )
+            MoreDivider()
+            MoreActionRow(
+                leadingText = "E",
+                title = "Delete exported files",
+                supportingText = "Remove LedgerLens CSV and diagnostics files from app-controlled export folders.",
+                onClick = onDeleteExportedFiles
+            )
+            MoreDivider()
+            MoreActionRow(
+                leadingText = "X",
+                title = "Delete all LedgerLens data",
+                supportingText = "Shows a confirmation before removing local LedgerLens data.",
+                trailingText = "Confirm",
+                onClick = onDeleteAllData
+            )
+        }
+    }
+}
+
+@Composable
+fun HelpPanel() {
+    MoreSectionCard {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = "How LedgerLens works",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+            )
+            MoreBodyText("Sync SMS alerts imports financial-looking inbox messages and updates transactions from senders you approved.")
+            MoreBodyText("Banks & cards lets you choose which SMS senders LedgerLens should use. Ignored senders are not parsed in future syncs.")
+            MoreBodyText("Review is where you fix merchants, categories, uncertain transactions, possible transfers, card payments, refunds, and reimbursements.")
+            MoreBodyText("Spending includes expenses and subtracts refunds/reimbursements. Transfers, card payments, income, and excluded items do not inflate spending.")
+            MoreBodyText("Export transactions creates a CSV without original SMS text. Parser diagnostics are for troubleshooting and live under Advanced.")
+        }
+    }
+}
 
 @Composable
 fun MoreSnapshotCard(
@@ -486,12 +612,12 @@ fun MoreSnapshotCard(
                 fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
             )
             Text(
-                text = "$transactionCount transactions from $sourceCount SMS sources",
+                text = "$transactionCount transactions from $sourceCount banks/cards",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
             )
             Text(
-                text = "$rawAlertCount imported SMS - $activeRuleCount saved rules",
+                text = "$rawAlertCount imported SMS alerts - $activeRuleCount saved rules",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

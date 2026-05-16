@@ -1,9 +1,16 @@
 package com.example.ledgerlens.data.entity
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "raw_alerts")
+@Entity(
+    tableName = "raw_alerts",
+    indices = [
+        Index(value = ["processingStatus"]),
+        Index(value = ["postTimeEpochMs"])
+    ]
+)
 data class RawAlertEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,

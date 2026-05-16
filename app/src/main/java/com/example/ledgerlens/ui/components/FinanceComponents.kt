@@ -16,9 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -28,7 +26,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
@@ -118,31 +115,32 @@ data class StatStripItem(
     val emphasized: Boolean = false
 )
 
-@Immutable
-data class QuickActionItem(
-    val title: String,
-    val supportingText: String,
-    val onClick: () -> Unit
-)
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LedgerAppScaffold(
     title: String,
     activeScreen: AppScreen,
     onNavigate: (AppScreen) -> Unit,
-    onQuickActions: () -> Unit,
+    onSyncSmsAlerts: () -> Unit,
     modifier: Modifier = Modifier,
     showBottomNav: Boolean = true,
     onBack: (() -> Unit)? = null,
     content: @Composable (PaddingValues) -> Unit
 ) {
+    val rootTabScreen = activeScreen in setOf(
+        AppScreen.SUMMARY,
+        AppScreen.REVIEW_QUEUE,
+        AppScreen.TRANSACTIONS,
+        AppScreen.TOOLS
+    )
     Scaffold(
         modifier = modifier,
         topBar = {
             LedgerTopBar(
                 title = title,
-                onBack = onBack
+                onBack = if (rootTabScreen) null else onBack,
+                trailingText = "Sync",
+                onTrailingClick = onSyncSmsAlerts
             )
         },
         bottomBar = {
@@ -184,7 +182,13 @@ fun LedgerTopBar(
                 fontWeight = FontWeight.SemiBold
             )
         },
-        navigationIcon = {},
+        navigationIcon = {
+            if (onBack != null) {
+                TextButton(onClick = onBack) {
+                    Text("Back")
+                }
+            }
+        },
         actions = {
             if (trailingText != null && onTrailingClick != null) {
                 TextButton(onClick = onTrailingClick) {
@@ -228,50 +232,6 @@ fun LedgerBottomNav(
                 },
                 label = { Text(destination.label) }
             )
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun QuickActionSheet(
-    actions: List<QuickActionItem>,
-    onDismiss: () -> Unit
-) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = MaterialTheme.colorScheme.surface
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 8.dp)
-        ) {
-            Text(
-                text = "Quick actions",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            actions.forEachIndexed { index, action ->
-                LedgerListRow(
-                    title = action.title,
-                    supportingText = action.supportingText,
-                    trailingText = "Run",
-                    onClick = {
-                        onDismiss()
-                        action.onClick()
-                    }
-                )
-                if (index != actions.lastIndex) {
-                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }

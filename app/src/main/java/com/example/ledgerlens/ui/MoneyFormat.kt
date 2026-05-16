@@ -1,117 +1,36 @@
-﻿package com.example.ledgerlens.ui
+package com.example.ledgerlens.ui
 
-import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.unit.dp
-import com.example.ledgerlens.data.AppDatabase
-import com.example.ledgerlens.data.entity.FinancialSourceEntity
-import com.example.ledgerlens.data.entity.RawAlertEntity
-import com.example.ledgerlens.data.entity.TransactionEntity
-import com.example.ledgerlens.data.entity.TransactionRuleEntity
-import com.example.ledgerlens.domain.TransactionTreatments
-import com.example.ledgerlens.domain.merchants.applyMerchantCategoryBulk
-import com.example.ledgerlens.domain.parser.ParseRunResult
-import com.example.ledgerlens.domain.parser.detectAndSaveSources
-import com.example.ledgerlens.domain.parser.parseIdentifiedSourceTransactions
-import com.example.ledgerlens.domain.parser.reapplySavedRulesToExistingTransactions
-import com.example.ledgerlens.domain.parser.updateRawAlertStatusesForSource
-import com.example.ledgerlens.domain.rules.MERCHANT_DEFAULT_RULE_SOURCE_KEY
-import com.example.ledgerlens.domain.rules.MerchantAliasApplyResult
-import com.example.ledgerlens.domain.rules.MerchantAliasRuleDraft
-import com.example.ledgerlens.domain.rules.applyMerchantAliasRuleToTransaction
-import com.example.ledgerlens.domain.rules.buildMerchantAliasRules
-import com.example.ledgerlens.domain.rules.normalizeAliasText
-import com.example.ledgerlens.domain.rules.normalizeRulePhrase
-import com.example.ledgerlens.domain.rules.previewMerchantAliasRule
-import com.example.ledgerlens.domain.source.SourceDetector
-import com.example.ledgerlens.domain.summary.CategorySpendSummary
-import com.example.ledgerlens.domain.summary.MerchantSummary
-import com.example.ledgerlens.domain.summary.categorySpendSummaries
-import com.example.ledgerlens.domain.summary.displayCategoryName
-import com.example.ledgerlens.domain.summary.expenseTransactionsForRange
-import com.example.ledgerlens.domain.summary.formatMonthYear
-import com.example.ledgerlens.domain.summary.getCurrentMonthStartEpochMs
-import com.example.ledgerlens.domain.summary.getNextMonthStartEpochMs
-import com.example.ledgerlens.domain.summary.getPreviousMonthStartEpochMs
-import com.example.ledgerlens.domain.summary.hasAnyReviewIssue
-import com.example.ledgerlens.domain.summary.hasLowConfidence
-import com.example.ledgerlens.domain.summary.hasMissingCategory
-import com.example.ledgerlens.domain.summary.hasMissingMerchant
-import com.example.ledgerlens.domain.summary.isVirtualUncategorizedCategory
-import com.example.ledgerlens.domain.summary.merchantSummaries
-import com.example.ledgerlens.domain.summary.merchantSummaryName
-import com.example.ledgerlens.domain.summary.treatmentLabel
-import com.example.ledgerlens.ui.components.CategoryBarRow
-import com.example.ledgerlens.ui.components.FinanceHeroCard
-import com.example.ledgerlens.ui.components.InlineInfoPanel
-import com.example.ledgerlens.ui.components.LedgerAppScaffold
-import com.example.ledgerlens.ui.components.LedgerBottomNav
-import com.example.ledgerlens.ui.components.LedgerListRow
-import com.example.ledgerlens.ui.components.ListSectionHeader
-import com.example.ledgerlens.ui.components.MetricPanel
-import com.example.ledgerlens.ui.components.MetricTile
-import com.example.ledgerlens.ui.components.MiniTrendStrip
-import com.example.ledgerlens.ui.components.QuickActionItem
-import com.example.ledgerlens.ui.components.QuickActionSheet
-import com.example.ledgerlens.ui.components.StatStrip
-import com.example.ledgerlens.ui.components.StatStripItem
-import com.example.ledgerlens.ui.components.TreatmentChip
-import com.example.ledgerlens.ui.components.TreatmentSelector
-import com.example.ledgerlens.ui.merchants.MerchantReviewScreen as MerchantReviewInboxScreen
-import com.example.ledgerlens.ui.rules.ParserRuleEditorSheet
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-fun formatSignedMoney(cents: Long): String {
-    val sign = if (cents < 0) "-" else ""
-    return "$sign${'$'}${"%.2f".format(Locale.US, kotlin.math.abs(cents) / 100.0)}"
+
+fun formatMoney(
+    minorUnits: Long,
+    currency: String,
+    signed: Boolean = false
+): String {
+    val normalizedCurrency = currency.trim().uppercase(Locale.US).ifBlank { "USD" }
+    val sign = when {
+        !signed -> ""
+        minorUnits < 0 -> "-"
+        minorUnits > 0 -> "+"
+        else -> ""
+    }
+    val amount = "%.2f".format(Locale.US, kotlin.math.abs(minorUnits) / 100.0)
+
+    return when (normalizedCurrency) {
+        "USD" -> "$sign${'$'}$amount"
+        "INR" -> "${sign}INR $amount"
+        else -> "$sign$normalizedCurrency $amount"
+    }
 }
 
+fun formatSignedMoney(cents: Long, currency: String = "USD"): String {
+    return formatMoney(cents, currency, signed = true)
+}
+
+fun formatCurrencyTotals(amountsByCurrency: Map<String, Long>): String {
+    if (amountsByCurrency.isEmpty()) return formatMoney(0, "USD")
+    return amountsByCurrency
+        .toSortedMap()
+        .map { (currency, amount) -> formatMoney(amount, currency, signed = true) }
+        .joinToString(" / ")
+}

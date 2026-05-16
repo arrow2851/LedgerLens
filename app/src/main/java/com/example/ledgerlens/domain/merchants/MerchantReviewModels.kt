@@ -4,6 +4,7 @@ import com.example.ledgerlens.data.entity.TransactionEntity
 import com.example.ledgerlens.data.entity.TransactionRuleEntity
 import com.example.ledgerlens.domain.TransactionTreatments
 import com.example.ledgerlens.domain.rules.MERCHANT_DEFAULT_RULE_SOURCE_KEY
+import com.example.ledgerlens.domain.rules.RuleKind
 import com.example.ledgerlens.domain.rules.normalizeRulePhrase
 import com.example.ledgerlens.domain.summary.MerchantSummary
 import com.example.ledgerlens.domain.summary.isVirtualUncategorizedCategory
@@ -190,11 +191,12 @@ fun buildMerchantDefaultRule(
         sourceKey = MERCHANT_DEFAULT_RULE_SOURCE_KEY,
         matchPhrase = merchantName,
         normalizedMatchPhrase = normalizeRulePhrase(merchantName),
+        ruleKind = RuleKind.MERCHANT_DEFAULT,
         merchantName = merchantName,
         categoryName = option.categoryName,
         transactionType = option.accountingTreatment,
         excludedFromSpending = TransactionTreatments.defaultExcludedFromSpending(option.accountingTreatment),
-        appliesToTreatment = option.accountingTreatment,
+        appliesToTreatment = null,
         applyCategoryAutomatically = true,
         requiresReview = requiresReview,
         active = true,

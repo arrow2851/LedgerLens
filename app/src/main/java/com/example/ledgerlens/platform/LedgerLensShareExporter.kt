@@ -6,7 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import com.example.ledgerlens.data.AppDatabase
-import com.example.ledgerlens.domain.export.buildParserCorpusJsonl
+import com.example.ledgerlens.domain.export.buildParserDiagnosticsJsonl
 import com.example.ledgerlens.domain.export.buildTransactionsCsv
 import java.io.File
 import java.text.SimpleDateFormat
@@ -43,7 +43,7 @@ class LedgerLensShareExporter(
         }
     }
 
-    fun exportParserCorpusJsonl() {
+    fun exportParserDiagnosticsJsonl(includeRawSmsText: Boolean = false) {
         activity.lifecycleScope.launch {
             val file = withContext(Dispatchers.IO) {
                 val rawAlerts = database.rawAlertDao().getAllOnce()
@@ -51,14 +51,19 @@ class LedgerLensShareExporter(
                     .getAllOnce()
                     .associateBy { it.rawAlertId }
                 val exportFile = createTimestampedExportFile(
-                    directoryName = "parser-corpus",
-                    filePrefix = "ledgerlens-parser-corpus",
+                    directoryName = "parser-diagnostics",
+                    filePrefix = if (includeRawSmsText) {
+                        "ledgerlens-parser-diagnostics-raw"
+                    } else {
+                        "ledgerlens-parser-diagnostics-redacted"
+                    },
                     fileExtension = "jsonl"
                 )
                 exportFile.writeText(
-                    buildParserCorpusJsonl(
+                    buildParserDiagnosticsJsonl(
                         rawAlerts = rawAlerts,
-                        transactionsByRawAlertId = transactionsByRawAlertId
+                        transactionsByRawAlertId = transactionsByRawAlertId,
+                        includeRawSmsText = includeRawSmsText
                     )
                 )
                 exportFile
@@ -67,10 +72,32 @@ class LedgerLensShareExporter(
             shareFile(
                 file = file,
                 mimeType = "application/json",
-                subject = "LedgerLens parser corpus export",
-                chooserTitle = "Export parser corpus"
+                subject = if (includeRawSmsText) {
+                    "LedgerLens raw parser diagnostics export"
+                } else {
+                    "LedgerLens redacted parser diagnostics export"
+                },
+                chooserTitle = "Export parser diagnostics"
             )
         }
+    }
+
+    fun deleteExportedFiles(): Int {
+        val documentsDir = activity.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS)
+            ?: return 0
+        val exportRoots = listOf(
+            File(documentsDir, "exports"),
+            File(documentsDir, "parser-diagnostics")
+        )
+        var deletedCount = 0
+        exportRoots.forEach { root ->
+            root.listFiles()?.forEach { file ->
+                if (file.isFile && file.delete()) {
+                    deletedCount++
+                }
+            }
+        }
+        return deletedCount
     }
 
     private fun createTimestampedExportFile(

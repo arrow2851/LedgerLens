@@ -35,6 +35,13 @@ interface FinancialSourceDao {
     suspend fun getBySourceKey(sourceKey: String): FinancialSourceEntity?
 
     @Query("""
+        SELECT *
+        FROM financial_sources
+        ORDER BY lastSeenEpochMs DESC
+    """)
+    suspend fun getAllOnce(): List<FinancialSourceEntity>
+
+    @Query("""
         UPDATE financial_sources
         SET
             confirmedAccountType = :accountType,

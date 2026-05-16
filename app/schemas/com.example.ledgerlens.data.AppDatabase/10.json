@@ -1,0 +1,556 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 10,
+    "identityHash": "f48b8d5c81372daacd35f9c17fd6b302",
+    "entities": [
+      {
+        "tableName": "raw_alerts",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `notificationKey` TEXT NOT NULL, `sourcePackage` TEXT NOT NULL, `title` TEXT, `text` TEXT, `bigText` TEXT, `subText` TEXT, `combinedText` TEXT NOT NULL, `postTimeEpochMs` INTEGER NOT NULL, `capturedAtEpochMs` INTEGER NOT NULL, `processingStatus` TEXT NOT NULL, `ignoreReason` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notificationKey",
+            "columnName": "notificationKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourcePackage",
+            "columnName": "sourcePackage",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "text",
+            "columnName": "text",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "bigText",
+            "columnName": "bigText",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "subText",
+            "columnName": "subText",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "combinedText",
+            "columnName": "combinedText",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "postTimeEpochMs",
+            "columnName": "postTimeEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "capturedAtEpochMs",
+            "columnName": "capturedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "processingStatus",
+            "columnName": "processingStatus",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ignoreReason",
+            "columnName": "ignoreReason",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_raw_alerts_processingStatus",
+            "unique": false,
+            "columnNames": [
+              "processingStatus"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_raw_alerts_processingStatus` ON `${TABLE_NAME}` (`processingStatus`)"
+          },
+          {
+            "name": "index_raw_alerts_postTimeEpochMs",
+            "unique": false,
+            "columnNames": [
+              "postTimeEpochMs"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_raw_alerts_postTimeEpochMs` ON `${TABLE_NAME}` (`postTimeEpochMs`)"
+          }
+        ]
+      },
+      {
+        "tableName": "transactions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `rawAlertId` INTEGER NOT NULL, `sourceKey` TEXT NOT NULL, `transactionType` TEXT NOT NULL, `accountingTreatment` TEXT NOT NULL, `amountCents` INTEGER NOT NULL, `currency` TEXT NOT NULL, `merchantRaw` TEXT, `displayMerchantName` TEXT, `spendingMerchantName` TEXT, `sourceInstitution` TEXT, `accountHint` TEXT, `occurredAtEpochMs` INTEGER NOT NULL, `receivedAtEpochMs` INTEGER NOT NULL, `parseConfidence` REAL NOT NULL, `reviewStatus` TEXT NOT NULL, `excludedFromSpending` INTEGER NOT NULL, `parserNotes` TEXT, `merchantUserEdited` INTEGER NOT NULL, `categoryUserEdited` INTEGER NOT NULL, `treatmentUserEdited` INTEGER NOT NULL, `createdAtEpochMs` INTEGER NOT NULL, `updatedAtEpochMs` INTEGER NOT NULL, `categoryName` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rawAlertId",
+            "columnName": "rawAlertId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceKey",
+            "columnName": "sourceKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "transactionType",
+            "columnName": "transactionType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accountingTreatment",
+            "columnName": "accountingTreatment",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "amountCents",
+            "columnName": "amountCents",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currency",
+            "columnName": "currency",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "merchantRaw",
+            "columnName": "merchantRaw",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "displayMerchantName",
+            "columnName": "displayMerchantName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "spendingMerchantName",
+            "columnName": "spendingMerchantName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sourceInstitution",
+            "columnName": "sourceInstitution",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "accountHint",
+            "columnName": "accountHint",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "occurredAtEpochMs",
+            "columnName": "occurredAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "receivedAtEpochMs",
+            "columnName": "receivedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "parseConfidence",
+            "columnName": "parseConfidence",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reviewStatus",
+            "columnName": "reviewStatus",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "excludedFromSpending",
+            "columnName": "excludedFromSpending",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "parserNotes",
+            "columnName": "parserNotes",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "merchantUserEdited",
+            "columnName": "merchantUserEdited",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryUserEdited",
+            "columnName": "categoryUserEdited",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "treatmentUserEdited",
+            "columnName": "treatmentUserEdited",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtEpochMs",
+            "columnName": "createdAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtEpochMs",
+            "columnName": "updatedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryName",
+            "columnName": "categoryName",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_transactions_rawAlertId",
+            "unique": true,
+            "columnNames": [
+              "rawAlertId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_transactions_rawAlertId` ON `${TABLE_NAME}` (`rawAlertId`)"
+          },
+          {
+            "name": "index_transactions_sourceKey",
+            "unique": false,
+            "columnNames": [
+              "sourceKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_transactions_sourceKey` ON `${TABLE_NAME}` (`sourceKey`)"
+          },
+          {
+            "name": "index_transactions_occurredAtEpochMs",
+            "unique": false,
+            "columnNames": [
+              "occurredAtEpochMs"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_transactions_occurredAtEpochMs` ON `${TABLE_NAME}` (`occurredAtEpochMs`)"
+          },
+          {
+            "name": "index_transactions_accountingTreatment",
+            "unique": false,
+            "columnNames": [
+              "accountingTreatment"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_transactions_accountingTreatment` ON `${TABLE_NAME}` (`accountingTreatment`)"
+          },
+          {
+            "name": "index_transactions_reviewStatus",
+            "unique": false,
+            "columnNames": [
+              "reviewStatus"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_transactions_reviewStatus` ON `${TABLE_NAME}` (`reviewStatus`)"
+          },
+          {
+            "name": "index_transactions_currency",
+            "unique": false,
+            "columnNames": [
+              "currency"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_transactions_currency` ON `${TABLE_NAME}` (`currency`)"
+          }
+        ]
+      },
+      {
+        "tableName": "financial_sources",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sourceKey` TEXT NOT NULL, `sourceAddress` TEXT NOT NULL, `institutionName` TEXT, `accountHint` TEXT, `suggestedAccountType` TEXT NOT NULL, `confirmedAccountType` TEXT, `displayName` TEXT, `detectionConfidence` REAL NOT NULL, `userConfirmed` INTEGER NOT NULL, `ignored` INTEGER NOT NULL, `messageCount` INTEGER NOT NULL, `firstSeenEpochMs` INTEGER NOT NULL, `lastSeenEpochMs` INTEGER NOT NULL, `sampleMessage` TEXT, `createdAtEpochMs` INTEGER NOT NULL, `updatedAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`sourceKey`))",
+        "fields": [
+          {
+            "fieldPath": "sourceKey",
+            "columnName": "sourceKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceAddress",
+            "columnName": "sourceAddress",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "institutionName",
+            "columnName": "institutionName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "accountHint",
+            "columnName": "accountHint",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "suggestedAccountType",
+            "columnName": "suggestedAccountType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "confirmedAccountType",
+            "columnName": "confirmedAccountType",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "displayName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "detectionConfidence",
+            "columnName": "detectionConfidence",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "userConfirmed",
+            "columnName": "userConfirmed",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ignored",
+            "columnName": "ignored",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "messageCount",
+            "columnName": "messageCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "firstSeenEpochMs",
+            "columnName": "firstSeenEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSeenEpochMs",
+            "columnName": "lastSeenEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sampleMessage",
+            "columnName": "sampleMessage",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAtEpochMs",
+            "columnName": "createdAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtEpochMs",
+            "columnName": "updatedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "sourceKey"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_financial_sources_userConfirmed_ignored",
+            "unique": false,
+            "columnNames": [
+              "userConfirmed",
+              "ignored"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_financial_sources_userConfirmed_ignored` ON `${TABLE_NAME}` (`userConfirmed`, `ignored`)"
+          }
+        ]
+      },
+      {
+        "tableName": "transaction_rules",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `sourceKey` TEXT NOT NULL, `matchPhrase` TEXT NOT NULL, `normalizedMatchPhrase` TEXT NOT NULL, `ruleKind` TEXT NOT NULL, `merchantName` TEXT, `categoryName` TEXT, `transactionType` TEXT, `reviewStatus` TEXT, `excludedFromSpending` INTEGER, `appliesToTreatment` TEXT, `applyCategoryAutomatically` INTEGER NOT NULL, `requiresReview` INTEGER NOT NULL, `active` INTEGER NOT NULL, `createdAtEpochMs` INTEGER NOT NULL, `updatedAtEpochMs` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceKey",
+            "columnName": "sourceKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "matchPhrase",
+            "columnName": "matchPhrase",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "normalizedMatchPhrase",
+            "columnName": "normalizedMatchPhrase",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ruleKind",
+            "columnName": "ruleKind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "merchantName",
+            "columnName": "merchantName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "categoryName",
+            "columnName": "categoryName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "transactionType",
+            "columnName": "transactionType",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "reviewStatus",
+            "columnName": "reviewStatus",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "excludedFromSpending",
+            "columnName": "excludedFromSpending",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "appliesToTreatment",
+            "columnName": "appliesToTreatment",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "applyCategoryAutomatically",
+            "columnName": "applyCategoryAutomatically",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "requiresReview",
+            "columnName": "requiresReview",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "active",
+            "columnName": "active",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtEpochMs",
+            "columnName": "createdAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtEpochMs",
+            "columnName": "updatedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_transaction_rules_sourceKey_normalizedMatchPhrase",
+            "unique": true,
+            "columnNames": [
+              "sourceKey",
+              "normalizedMatchPhrase"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_transaction_rules_sourceKey_normalizedMatchPhrase` ON `${TABLE_NAME}` (`sourceKey`, `normalizedMatchPhrase`)"
+          },
+          {
+            "name": "index_transaction_rules_active_ruleKind",
+            "unique": false,
+            "columnNames": [
+              "active",
+              "ruleKind"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_transaction_rules_active_ruleKind` ON `${TABLE_NAME}` (`active`, `ruleKind`)"
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'f48b8d5c81372daacd35f9c17fd6b302')"
+    ]
+  }
+}

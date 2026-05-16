@@ -34,8 +34,17 @@ interface TransactionDao {
     """)
     suspend fun getAllOnce(): List<TransactionEntity>
 
+    @Query("SELECT * FROM transactions WHERE id = :transactionId LIMIT 1")
+    suspend fun getById(transactionId: Long): TransactionEntity?
+
+    @Query("SELECT * FROM transactions WHERE rawAlertId = :rawAlertId LIMIT 1")
+    suspend fun getByRawAlertId(rawAlertId: Long): TransactionEntity?
+
     @Query("SELECT COUNT(*) FROM transactions WHERE rawAlertId = :rawAlertId")
     suspend fun countByRawAlertId(rawAlertId: Long): Int
+
+    @Query("SELECT COUNT(*) FROM transactions WHERE sourceKey = :sourceKey")
+    suspend fun countBySourceKey(sourceKey: String): Int
 
     @Query("DELETE FROM transactions")
     suspend fun deleteAll()

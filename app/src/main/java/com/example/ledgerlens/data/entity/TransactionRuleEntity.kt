@@ -10,6 +10,9 @@ import androidx.room.PrimaryKey
         Index(
             value = ["sourceKey", "normalizedMatchPhrase"],
             unique = true
+        ),
+        Index(
+            value = ["active", "ruleKind"]
         )
     ]
 )
@@ -21,6 +24,7 @@ data class TransactionRuleEntity(
 
     val matchPhrase: String,
     val normalizedMatchPhrase: String,
+    val ruleKind: String = "SOURCE_ALIAS",
 
     val merchantName: String? = null,
     val categoryName: String? = null,

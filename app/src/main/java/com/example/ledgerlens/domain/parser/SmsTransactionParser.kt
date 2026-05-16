@@ -4,13 +4,11 @@ import com.example.ledgerlens.data.entity.RawAlertEntity
 import com.example.ledgerlens.data.entity.TransactionEntity
 import com.example.ledgerlens.domain.TransactionTreatments
 import java.util.Locale
-import kotlin.math.roundToLong
 import com.example.ledgerlens.data.entity.FinancialSourceEntity
 
 object SmsTransactionParser {
 
-    private const val MONEY_AMOUNT_PATTERN =
-        """(?:\$|usd\s*|rs\.?\s*|inr\s*)\s*(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]{1,2})?"""
+    private val MONEY_AMOUNT_PATTERN = MoneyExtractor.MONEY_AMOUNT_PATTERN
 
     private data class ParserDiagnostic(
         val profile: String,
@@ -46,9 +44,24 @@ object SmsTransactionParser {
     )
 
     fun isNonTransactionAlert(rawAlert: RawAlertEntity): Boolean {
-        return looksLikeNonTransactionAlert(
-            rawAlert.combinedText.trim().lowercase(Locale.US)
-        )
+        return FinancialSmsClassifier.isLikelyNonTransactionFinancialAlert(rawAlert.combinedText)
+    }
+
+    fun ignoreReason(
+        rawAlert: RawAlertEntity,
+        source: FinancialSourceEntity? = null
+    ): String? {
+        val body = rawAlert.combinedText.trim()
+        val profileOutcome = parseWithSourceProfile(body, source)
+        if (profileOutcome is ProfileOutcome.Ignored) {
+            return profileOutcome.diagnostic.ignoreReason
+                ?: profileOutcome.diagnostic.treatmentReason
+        }
+        return if (FinancialSmsClassifier.isLikelyNonTransactionFinancialAlert(body)) {
+            "Informational financial alert, not a transaction."
+        } else {
+            null
+        }
     }
 
     fun parse(
@@ -140,16 +153,7 @@ object SmsTransactionParser {
     }
 
     private fun extractAmountCents(text: String): Long? {
-        val regex = Regex(
-            pattern = """(?i)(?:\$|usd\s*|rs\.?\s*|inr\s*)\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)"""
-        )
-
-        val match = regex.find(text) ?: return null
-        val amountText = match.groupValues[1].replace(",", "")
-
-        return amountText
-            .toDoubleOrNull()
-            ?.let { (it * 100).roundToLong() }
+        return MoneyExtractor.parseAmountToMinorUnits(text)
     }
 
     private fun inferAccountingTreatment(lower: String): String {
@@ -204,66 +208,6 @@ object SmsTransactionParser {
 
             else -> TransactionTreatments.UNKNOWN
         }
-    }
-
-    private fun looksLikeNonTransactionAlert(lower: String): Boolean {
-        if (
-            containsAny(
-                lower,
-                "otp",
-                "one time password",
-                "verification code",
-                "security code",
-                "transaction declined",
-                "declined",
-                "fraud alert",
-                "did you attempt",
-                "not done by you"
-            )
-        ) {
-            return true
-        }
-
-        val hasTransactionSignal = listOf(
-            "spent",
-            "purchase",
-            "charged",
-            "charge at",
-            "chrge or hold",
-            "debit card purchase",
-            "debit card transaction",
-            "withdrawal",
-            "withdrawn",
-            "atm",
-            "zelle",
-            "venmo",
-            "cash app",
-            "deposit",
-            "direct deposit",
-            "refund",
-            "credited back",
-            "transfer"
-        ).any { lower.contains(it) }
-
-        if (hasTransactionSignal) return false
-
-        return listOf(
-            "available balance",
-            "statement balance",
-            "minimum payment",
-            "payment due",
-            "due date",
-            "available credit",
-            "credit limit",
-            "security code",
-            "verification code",
-            "fraud alert",
-            "did you attempt",
-            "low balance",
-            "balance is",
-            "bal is",
-            "available bal"
-        ).any { lower.contains(it) }
     }
 
     private fun parseWithSourceProfile(
@@ -679,7 +623,10 @@ object SmsTransactionParser {
             sourceInstitution = institution,
             accountHint = accountHint,
             categoryName = categorySuggestion,
-            occurredAtEpochMs = rawAlert.postTimeEpochMs,
+            occurredAtEpochMs = DateExtractor.extractTransactionDateEpochMs(
+                text = rawAlert.combinedText,
+                receivedAtEpochMs = rawAlert.postTimeEpochMs
+            ),
             receivedAtEpochMs = rawAlert.capturedAtEpochMs,
             parseConfidence = confidence,
             reviewStatus = reviewStatus,
@@ -709,11 +656,7 @@ object SmsTransactionParser {
     }
 
     private fun inferCurrency(text: String): String {
-        return if (Regex("""(?i)\b(?:rs\.?|inr)\b""").containsMatchIn(text)) {
-            "INR"
-        } else {
-            "USD"
-        }
+        return MoneyExtractor.inferCurrency(text)
     }
 
     private fun inferInstitution(text: String): String? {

@@ -4,7 +4,6 @@ import com.example.ledgerlens.data.entity.RawAlertEntity
 import com.example.ledgerlens.data.entity.TransactionEntity
 import com.example.ledgerlens.data.entity.TransactionRuleEntity
 import com.example.ledgerlens.domain.TransactionTreatments
-import java.util.Locale
 
 data class MerchantAliasRuleDraft(
     val sourceKey: String,
@@ -43,9 +42,7 @@ data class MerchantAliasApplyResult(
 )
 
 fun normalizeAliasText(value: String): String {
-    return value
-        .lowercase(Locale.US)
-        .filter { it.isLetterOrDigit() }
+    return canonicalRuleText(value)
 }
 
 fun aliasMatchesText(alias: String, text: String?): Boolean {
@@ -64,13 +61,50 @@ fun ruleMatchesTransaction(
     transaction: TransactionEntity,
     rawAlert: RawAlertEntity?
 ): Boolean {
-    val alias = rule.matchPhrase.trim()
+    return aliasMatchesTransaction(rule.matchPhrase, transaction, rawAlert)
+}
+
+fun aliasMatchesTransaction(
+    aliasValue: String,
+    transaction: TransactionEntity,
+    rawAlert: RawAlertEntity?
+): Boolean {
+    val alias = aliasValue.trim()
     if (alias.isBlank()) return false
 
-    return aliasMatchesText(alias, rawAlert?.combinedText) ||
-            aliasMatchesText(alias, transaction.displayMerchantName) ||
-            aliasMatchesText(alias, transaction.merchantRaw) ||
-            aliasMatchesText(alias, transaction.sourceInstitution)
+    if (aliasMatchesText(alias, transaction.displayMerchantName) ||
+        aliasMatchesText(alias, transaction.merchantRaw)
+    ) {
+        return true
+    }
+
+    if (isOverbroadRawAlias(alias)) {
+        return false
+    }
+
+    return aliasMatchesText(alias, rawAlert?.combinedText)
+}
+
+private fun isOverbroadRawAlias(alias: String): Boolean {
+    val normalized = normalizeAliasText(alias)
+    if (normalized.length < 6) return true
+    return normalized in setOf(
+        "chase",
+        "capitalone",
+        "hdfc",
+        "hdfcbank",
+        "bank",
+        "credit",
+        "debit",
+        "card",
+        "visa",
+        "mastercard",
+        "transaction",
+        "purchase",
+        "payment",
+        "creditcard",
+        "debitcard"
+    )
 }
 
 fun previewMerchantAliasRule(
@@ -86,9 +120,7 @@ fun previewMerchantAliasRule(
         .mapNotNull { transaction ->
             val rawAlert = rawAlertsById[transaction.rawAlertId]
             val matchedAliases = aliases.filter { alias ->
-                aliasMatchesText(alias, rawAlert?.combinedText) ||
-                        aliasMatchesText(alias, transaction.displayMerchantName) ||
-                        aliasMatchesText(alias, transaction.merchantRaw)
+                aliasMatchesTransaction(alias, transaction, rawAlert)
             }
 
             if (matchedAliases.isEmpty()) {
@@ -189,6 +221,7 @@ fun buildMerchantAliasRules(
             sourceKey = draft.sourceKey,
             matchPhrase = alias,
             normalizedMatchPhrase = normalizeRulePhrase(alias),
+            ruleKind = RuleKind.SOURCE_ALIAS,
             merchantName = canonicalName,
             categoryName = if (draft.applyCategory) draft.categoryName?.trim()?.ifBlank { null } else null,
             transactionType = if (draft.applyTreatment) draft.transactionType?.trim()?.ifBlank { null } else null,
@@ -201,7 +234,7 @@ fun buildMerchantAliasRules(
             } else {
                 null
             },
-            appliesToTreatment = if (draft.applyTreatment) draft.transactionType?.trim()?.ifBlank { null } else null,
+            appliesToTreatment = null,
             applyCategoryAutomatically = draft.applyCategory,
             requiresReview = draft.requiresReview,
             active = draft.active,

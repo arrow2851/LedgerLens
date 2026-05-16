@@ -7,7 +7,12 @@ import androidx.room.PrimaryKey
 @Entity(
     tableName = "transactions",
     indices = [
-        Index(value = ["rawAlertId"], unique = true)
+        Index(value = ["rawAlertId"], unique = true),
+        Index(value = ["sourceKey"]),
+        Index(value = ["occurredAtEpochMs"]),
+        Index(value = ["accountingTreatment"]),
+        Index(value = ["reviewStatus"]),
+        Index(value = ["currency"])
     ]
 )
 data class TransactionEntity(

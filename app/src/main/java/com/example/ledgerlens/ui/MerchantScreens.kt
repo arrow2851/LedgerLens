@@ -1,4 +1,4 @@
-﻿package com.example.ledgerlens.ui
+package com.example.ledgerlens.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
@@ -96,8 +96,6 @@ import com.example.ledgerlens.ui.components.ListSectionHeader
 import com.example.ledgerlens.ui.components.MetricPanel
 import com.example.ledgerlens.ui.components.MetricTile
 import com.example.ledgerlens.ui.components.MiniTrendStrip
-import com.example.ledgerlens.ui.components.QuickActionItem
-import com.example.ledgerlens.ui.components.QuickActionSheet
 import com.example.ledgerlens.ui.components.StatStrip
 import com.example.ledgerlens.ui.components.StatStripItem
 import com.example.ledgerlens.ui.components.TreatmentChip
@@ -118,8 +116,6 @@ fun MerchantSummaryCard(
     val formatter = remember {
         SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
     }
-
-    val activityAmount = merchant.totalAmountCents / 100.0
 
     Card(
         modifier = Modifier
@@ -150,12 +146,12 @@ fun MerchantSummaryCard(
             )
 
             Text(
-                text = "Activity total: $${"%.2f".format(activityAmount)}",
+                text = "Activity total: ${formatMoney(merchant.totalAmountCents, merchant.currency)}",
                 style = MaterialTheme.typography.labelSmall
             )
 
             Text(
-                text = "Net spending impact: ${formatSignedMoney(merchant.spendingAmountCents)}",
+                text = "Net spending impact: ${formatSignedMoney(merchant.spendingAmountCents, merchant.currency)}",
                 style = MaterialTheme.typography.labelSmall
             )
 
@@ -300,7 +296,7 @@ fun MerchantDetailSummaryCard(
             Spacer(modifier = Modifier.height(6.dp))
 
             Text("Transactions: $transactionCount")
-            Text("Net spending impact: ${formatSignedMoney(expenseTotalCents)}")
+            Text("Net spending impact: ${formatSignedMoney(expenseTotalCents, merchant.currency)}")
             Text("Usual treatment: ${treatmentLabel(merchant.primaryTreatment)}")
             Text("Uncategorized expenses: ${merchant.uncategorizedCount}")
 
@@ -469,7 +465,7 @@ fun MerchantCategoryAssignmentCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Accounting treatment",
+                text = "How to count this",
                 style = MaterialTheme.typography.titleSmall
             )
 
@@ -598,7 +594,6 @@ fun MerchantTransactionCard(
         SimpleDateFormat("MMM dd, yyyy h:mm a", Locale.getDefault())
     }
 
-    val amount = transaction.amountCents / 100.0
     val spendingImpact = TransactionTreatments.spendingImpactCents(
         treatment = transaction.accountingTreatment,
         excludedFromSpending = transaction.excludedFromSpending,
@@ -614,13 +609,13 @@ fun MerchantTransactionCard(
             modifier = Modifier.padding(12.dp)
         ) {
             Text(
-                text = "$${"%.2f".format(amount)} - ${treatmentLabel(transaction.accountingTreatment)}",
+                text = "${formatMoney(transaction.amountCents, transaction.currency)} - ${treatmentLabel(transaction.accountingTreatment)}",
                 style = MaterialTheme.typography.bodyLarge
             )
 
             if (spendingImpact != 0L) {
                 Text(
-                    text = "Spending impact: ${formatSignedMoney(spendingImpact)}",
+                    text = "Spending impact: ${formatSignedMoney(spendingImpact, transaction.currency)}",
                     style = MaterialTheme.typography.labelSmall
                 )
             }

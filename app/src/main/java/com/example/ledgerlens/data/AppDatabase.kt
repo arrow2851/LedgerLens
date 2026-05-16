@@ -22,7 +22,7 @@ import com.example.ledgerlens.data.entity.TransactionRuleEntity
         FinancialSourceEntity::class,
         TransactionRuleEntity::class
     ],
-    version = 8,
+    version = 10,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -318,6 +318,46 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE transaction_rules ADD COLUMN ruleKind TEXT NOT NULL DEFAULT 'SOURCE_ALIAS'")
+                db.execSQL(
+                    """
+                    UPDATE transaction_rules
+                    SET ruleKind = 'MERCHANT_DEFAULT'
+                    WHERE sourceKey = '__merchant_defaults__'
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_transactions_sourceKey ON transactions(sourceKey)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_transactions_occurredAtEpochMs ON transactions(occurredAtEpochMs)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_transactions_accountingTreatment ON transactions(accountingTreatment)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_transactions_reviewStatus ON transactions(reviewStatus)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_transactions_currency ON transactions(currency)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_raw_alerts_processingStatus ON raw_alerts(processingStatus)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_raw_alerts_postTimeEpochMs ON raw_alerts(postTimeEpochMs)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_financial_sources_userConfirmed_ignored ON financial_sources(userConfirmed, ignored)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_transaction_rules_active_ruleKind ON transaction_rules(active, ruleKind)")
+            }
+        }
+
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE raw_alerts ADD COLUMN ignoreReason TEXT")
+            }
+        }
+
+        val ALL_MIGRATIONS = arrayOf(
+            MIGRATION_1_2,
+            MIGRATION_2_3,
+            MIGRATION_3_4,
+            MIGRATION_4_5,
+            MIGRATION_5_6,
+            MIGRATION_6_7,
+            MIGRATION_7_8,
+            MIGRATION_8_9,
+            MIGRATION_9_10
+        )
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -325,15 +365,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "ledgerlens.db"
                 )
-                    .addMigrations(
-                        MIGRATION_1_2,
-                        MIGRATION_2_3,
-                        MIGRATION_3_4,
-                        MIGRATION_4_5,
-                        MIGRATION_5_6,
-                        MIGRATION_6_7,
-                        MIGRATION_7_8
-                    )
+                    .addMigrations(*ALL_MIGRATIONS)
                     .build()
                     .also { INSTANCE = it }
             }

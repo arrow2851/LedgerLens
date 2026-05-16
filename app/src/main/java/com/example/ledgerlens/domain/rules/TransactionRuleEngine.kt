@@ -9,7 +9,7 @@ import java.util.Locale
 const val MERCHANT_DEFAULT_RULE_SOURCE_KEY = "__merchant_defaults__"
 
 fun normalizeRulePhrase(phrase: String): String {
-    return phrase.trim().lowercase(Locale.US)
+    return canonicalRuleText(phrase)
 }
 
 fun applyRulesToTransaction(
@@ -106,8 +106,11 @@ fun applyRulesToTransaction(
         return updated
     }
 
-    val existingNotes = updated.parserNotes.orEmpty()
     val ruleNote = "Applied saved rule(s): ${appliedRulePhrases.joinToString(", ")}."
+    val existingNotes = updated.parserNotes.orEmpty()
+    if (existingNotes.contains(ruleNote)) {
+        return updated
+    }
 
     return updated.copy(
         parserNotes = listOf(existingNotes, ruleNote)
@@ -116,16 +119,25 @@ fun applyRulesToTransaction(
     )
 }
 
+fun canonicalRuleText(value: String): String {
+    return value
+        .lowercase(Locale.US)
+        .filter { it.isLetterOrDigit() }
+}
+
 private fun TransactionRuleEntity.matchesTreatment(treatment: String): Boolean {
     return appliesToTreatment.isNullOrBlank() ||
-            appliesToTreatment == treatment ||
-            transactionType != null
+            appliesToTreatment == treatment
 }
 
 private fun TransactionRuleEntity.shouldApplyCategoryTo(treatment: String): Boolean {
     if (!applyCategoryAutomatically || requiresReview) return false
     if (categoryName.isNullOrBlank()) return false
-    return !appliesToTreatment.isNullOrBlank() ||
-            treatment == TransactionTreatments.EXPENSE ||
-            transactionType == treatment
+    if (!appliesToTreatment.isNullOrBlank()) {
+        return appliesToTreatment == treatment
+    }
+    if (!transactionType.isNullOrBlank()) {
+        return true
+    }
+    return treatment == TransactionTreatments.EXPENSE
 }

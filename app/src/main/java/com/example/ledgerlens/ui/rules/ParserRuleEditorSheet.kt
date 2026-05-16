@@ -38,6 +38,7 @@ import com.example.ledgerlens.domain.summary.treatmentLabel
 import com.example.ledgerlens.ui.components.LedgerListRow
 import com.example.ledgerlens.ui.components.SmallPill
 import com.example.ledgerlens.ui.components.TreatmentSelector
+import com.example.ledgerlens.ui.formatMoney
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -234,7 +235,7 @@ fun ParserRuleEditorSheet(
                                 ?: "Unknown merchant",
                             supportingText = formatter.format(Date(transaction.occurredAtEpochMs)),
                             metadataText = "Matched ${item.matchedAliases.joinToString(", ")}",
-                            trailingText = "$${"%.2f".format(Locale.US, transaction.amountCents / 100.0)}",
+                            trailingText = formatMoney(transaction.amountCents, transaction.currency),
                             trailingSupportingText = treatmentLabel(transaction.accountingTreatment),
                             leadingText = "M"
                         )

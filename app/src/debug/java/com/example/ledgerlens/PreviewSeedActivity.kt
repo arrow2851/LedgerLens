@@ -12,11 +12,11 @@ import kotlinx.coroutines.withContext
 import java.util.Calendar
 
 /**
- * Debug-only screenshot helper.
+ * Debug-only preview launcher.
  *
- * This activity is never the launcher and is present only in debug builds. It replaces the
- * emulator's local transaction table with deterministic sample data, then opens the real
- * LedgerLensActivity. Production/release builds do not contain this class.
+ * A new preview install receives deterministic sample data so device feedback is useful. Existing
+ * data is never replaced, which means edits and review decisions persist across launches and later
+ * stable-signed preview APK updates. Production/release builds do not contain this class.
  */
 class PreviewSeedActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -25,14 +25,23 @@ class PreviewSeedActivity : ComponentActivity() {
         lifecycleScope.launch {
             withContext(Dispatchers.IO) {
                 val database = AppDatabase.getInstance(applicationContext)
-                database.transactionDao().deleteAll()
-                previewTransactions().forEach { database.transactionDao().insert(it) }
+                if (database.transactionCount() == 0L) {
+                    previewTransactions().forEach { database.transactionDao().insert(it) }
+                }
             }
 
             startActivity(Intent(this@PreviewSeedActivity, LedgerLensActivity::class.java))
             finish()
         }
     }
+}
+
+private fun AppDatabase.transactionCount(): Long {
+    return openHelper.readableDatabase
+        .query("SELECT COUNT(*) FROM transactions")
+        .use { cursor ->
+            if (cursor.moveToFirst()) cursor.getLong(0) else 0L
+        }
 }
 
 private fun previewTransactions(): List<TransactionEntity> {

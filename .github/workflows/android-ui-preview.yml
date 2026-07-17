@@ -18,6 +18,7 @@ jobs:
   build:
     name: Build and verify APK
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - name: Check out UI branch
         uses: actions/checkout@v6
@@ -66,56 +67,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-  rebuilt-screenshots:
-    name: Capture rebuilt app screens
-    needs: build
+  baseline-apk:
+    name: Build frozen prototype baseline
     runs-on: ubuntu-latest
-    steps:
-      - name: Check out UI branch
-        uses: actions/checkout@v6
-
-      - name: Download debug APK
-        uses: actions/download-artifact@v5
-        with:
-          name: ledgerlens-debug-apk-${{ github.sha }}
-          path: preview-apk
-
-      - name: Capture Overview, Activity, Review, and Insights
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          arch: x86_64
-          profile: pixel_6
-          disable-animations: true
-          script: |
-            set -euxo pipefail
-            mkdir -p screenshots/rebuilt
-            adb install -r preview-apk/app-debug.apk
-            adb shell am force-stop com.example.ledgerlens
-            adb shell monkey -p com.example.ledgerlens -c android.intent.category.LAUNCHER 1
-            sleep 5
-            adb exec-out screencap -p > screenshots/rebuilt/01-overview.png
-            adb shell input tap 405 2220
-            sleep 2
-            adb exec-out screencap -p > screenshots/rebuilt/02-activity.png
-            adb shell input tap 675 2220
-            sleep 2
-            adb exec-out screencap -p > screenshots/rebuilt/03-review.png
-            adb shell input tap 945 2220
-            sleep 2
-            adb exec-out screencap -p > screenshots/rebuilt/04-insights.png
-
-      - name: Upload rebuilt screenshots
-        uses: actions/upload-artifact@v4
-        with:
-          name: ledgerlens-rebuilt-screenshots-${{ github.sha }}
-          path: screenshots/rebuilt/*.png
-          if-no-files-found: error
-          retention-days: 30
-
-  baseline-screenshot:
-    name: Capture frozen prototype baseline
-    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Check out pre-rebuild baseline
         uses: actions/checkout@v6
@@ -137,26 +92,78 @@ jobs:
       - name: Build baseline APK
         run: ./gradlew assembleDebug --stacktrace
 
-      - name: Capture baseline launcher
+      - name: Upload baseline APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ledgerlens-baseline-apk-${{ github.sha }}
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  screenshots:
+    name: Capture baseline and rebuilt screens
+    needs: [build, baseline-apk]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out UI branch
+        uses: actions/checkout@v6
+
+      - name: Download rebuilt APK
+        uses: actions/download-artifact@v5
+        with:
+          name: ledgerlens-debug-apk-${{ github.sha }}
+          path: preview-apk
+
+      - name: Download baseline APK
+        uses: actions/download-artifact@v5
+        with:
+          name: ledgerlens-baseline-apk-${{ github.sha }}
+          path: baseline-apk
+
+      - name: Capture baseline, Overview, Activity, Review, and Insights
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 34
           arch: x86_64
           profile: pixel_6
           disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: |
             set -euxo pipefail
-            mkdir -p screenshots/baseline
-            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            mkdir -p screenshots
+
+            adb install -r baseline-apk/app-debug.apk
             adb shell am force-stop com.example.ledgerlens
             adb shell monkey -p com.example.ledgerlens -c android.intent.category.LAUNCHER 1
-            sleep 5
-            adb exec-out screencap -p > screenshots/baseline/00-prototype-baseline.png
+            sleep 4
+            adb exec-out screencap -p > screenshots/00-prototype-baseline.png
+            adb uninstall com.example.ledgerlens
 
-      - name: Upload baseline screenshot
+            adb install -r preview-apk/app-debug.apk
+            adb shell am start -W -n com.example.ledgerlens/.PreviewSeedActivity
+            sleep 5
+
+            SIZE=$(adb shell wm size | awk -F: '/Physical size/ {gsub(/\r/, "", $2); gsub(/ /, "", $2); print $2}')
+            WIDTH=${SIZE%x*}
+            HEIGHT=${SIZE#*x}
+            TAP_Y=$((HEIGHT - 120))
+
+            adb exec-out screencap -p > screenshots/01-overview.png
+            adb shell input tap $((WIDTH * 3 / 8)) "$TAP_Y"
+            sleep 2
+            adb exec-out screencap -p > screenshots/02-activity.png
+            adb shell input tap $((WIDTH * 5 / 8)) "$TAP_Y"
+            sleep 2
+            adb exec-out screencap -p > screenshots/03-review.png
+            adb shell input tap $((WIDTH * 7 / 8)) "$TAP_Y"
+            sleep 2
+            adb exec-out screencap -p > screenshots/04-insights.png
+
+      - name: Upload screenshot set
         uses: actions/upload-artifact@v4
         with:
-          name: ledgerlens-prototype-baseline-${{ github.sha }}
-          path: screenshots/baseline/*.png
+          name: ledgerlens-ui-screenshots-${{ github.sha }}
+          path: screenshots/*.png
           if-no-files-found: error
           retention-days: 30

@@ -1,0 +1,1 @@
+Direct mobile prototype published to gh-pages/index.html at commit 760475bdb82d39909300795d71ccba5e678485fc. This commit exists only to trigger a fresh branch-based GitHub Pages build after removing the browser-side gzip loader.

@@ -29,7 +29,7 @@ value class CurrencyCode(val value: String) {
         val USD: CurrencyCode = CurrencyCode("USD")
 
         fun of(raw: String): CurrencyCode = CurrencyCode(
-            raw.trim().uppercase(Locale.US)
+            raw.trim().uppercase(Locale.US),
         )
     }
 }
@@ -123,23 +123,19 @@ data class SpendingTotal(
 object SpendingPolicy {
     fun defaultEffect(treatment: TransactionTreatment): SpendingEffect = when (treatment) {
         TransactionTreatment.PURCHASE,
-        TransactionTreatment.FEE,
-        -> SpendingEffect.INCREASE
+        TransactionTreatment.FEE -> SpendingEffect.INCREASE
 
         TransactionTreatment.REFUND,
         TransactionTreatment.REVERSAL,
-        TransactionTreatment.REIMBURSEMENT,
-        -> SpendingEffect.DECREASE
+        TransactionTreatment.REIMBURSEMENT -> SpendingEffect.DECREASE
 
         TransactionTreatment.INCOME,
         TransactionTreatment.TRANSFER,
         TransactionTreatment.CREDIT_CARD_PAYMENT,
-        TransactionTreatment.INFORMATIONAL,
-        -> SpendingEffect.NONE
+        TransactionTreatment.INFORMATIONAL -> SpendingEffect.NONE
 
         TransactionTreatment.CASH_WITHDRAWAL,
-        TransactionTreatment.UNKNOWN,
-        -> SpendingEffect.UNRESOLVED
+        TransactionTreatment.UNKNOWN -> SpendingEffect.UNRESOLVED
     }
 
     fun contributionMinor(
@@ -149,8 +145,7 @@ object SpendingPolicy {
         SpendingEffect.INCREASE -> amount.value
         SpendingEffect.DECREASE -> -amount.value
         SpendingEffect.NONE,
-        SpendingEffect.UNRESOLVED,
-        -> 0L
+        SpendingEffect.UNRESOLVED -> 0L
     }
 
     fun total(

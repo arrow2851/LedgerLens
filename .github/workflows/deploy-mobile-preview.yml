@@ -3,6 +3,8 @@ name: Deploy mobile mockup
 on:
   push:
     branches: ["mockups/mobile-preview"]
+  pull_request:
+    branches: ["master"]
   workflow_dispatch:
 
 permissions:

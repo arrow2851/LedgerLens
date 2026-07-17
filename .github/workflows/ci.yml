@@ -37,5 +37,38 @@ jobs:
       - name: Verify Gradle wrapper
         run: ./gradlew --version
 
-      - name: Run unit tests and lint
-        run: ./gradlew testDebugUnitTest lintDebug --stacktrace
+      - name: Run unit tests
+        id: unit_tests
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          ./gradlew testDebugUnitTest --console=plain 2>&1 | tee unit-test.log
+
+      - name: Run lint
+        id: lint
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          ./gradlew lintDebug --console=plain 2>&1 | tee lint.log
+
+      - name: Upload verification diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-verification-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            unit-test.log
+            lint.log
+            app/build/test-results/testDebugUnitTest/**
+            app/build/reports/tests/testDebugUnitTest/**
+            app/build/reports/lint-results-debug.*
+
+      - name: Enforce verification result
+        if: always()
+        run: |
+          echo "Unit test outcome: ${{ steps.unit_tests.outcome }}"
+          echo "Lint outcome: ${{ steps.lint.outcome }}"
+          test "${{ steps.unit_tests.outcome }}" = "success"
+          test "${{ steps.lint.outcome }}" = "success"

@@ -125,6 +125,8 @@ jobs:
           path: baseline-apk
 
       - name: Capture baseline, Overview, Activity, Review, and Insights
+        id: capture
+        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -133,40 +135,69 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: |
-            set -euxo pipefail
-            mkdir -p screenshots
+            set -u
+            mkdir -p screenshots diagnostics
+            exec > >(tee diagnostics/capture.log) 2>&1
 
+            echo "=== Device ==="
+            adb shell wm size || true
+            adb shell getprop ro.build.version.release || true
+
+            echo "=== Baseline ==="
             adb install -r baseline-apk/app-debug.apk
-            adb shell am force-stop com.example.ledgerlens
-            adb shell monkey -p com.example.ledgerlens -c android.intent.category.LAUNCHER 1
+            adb shell am force-stop com.example.ledgerlens || true
+            adb shell monkey -p com.example.ledgerlens -c android.intent.category.LAUNCHER 1 || true
             sleep 4
-            adb exec-out screencap -p > screenshots/00-prototype-baseline.png
-            adb uninstall com.example.ledgerlens
+            adb exec-out screencap -p > screenshots/00-prototype-baseline.png || true
+            adb uninstall com.example.ledgerlens || true
 
+            echo "=== Rebuilt preview ==="
             adb install -r preview-apk/app-debug.apk
-            adb shell am start -W -n com.example.ledgerlens.preview/com.example.ledgerlens.PreviewSeedActivity
-            sleep 5
+            adb shell am start -W -n com.example.ledgerlens.preview/com.example.ledgerlens.PreviewSeedActivity || true
+            sleep 6
+            adb shell dumpsys activity activities > diagnostics/activities.txt || true
+            adb logcat -d > diagnostics/logcat.txt || true
 
-            SIZE=$(adb shell wm size | awk -F: '/Physical size/ {gsub(/\r/, "", $2); gsub(/ /, "", $2); print $2}')
+            SIZE=$(adb shell wm size | sed -n 's/.*Physical size: //p' | tr -d '\r ' | head -n 1)
+            if [ -z "$SIZE" ]; then
+              SIZE=$(adb shell wm size | sed -n 's/.*Override size: //p' | tr -d '\r ' | head -n 1)
+            fi
+            echo "Resolved size: $SIZE"
             WIDTH=${SIZE%x*}
             HEIGHT=${SIZE#*x}
             TAP_Y=$((HEIGHT - 120))
 
-            adb exec-out screencap -p > screenshots/01-overview.png
-            adb shell input tap $((WIDTH * 3 / 8)) "$TAP_Y"
+            adb exec-out screencap -p > screenshots/01-overview.png || true
+            adb shell input tap $((WIDTH * 3 / 8)) "$TAP_Y" || true
             sleep 2
-            adb exec-out screencap -p > screenshots/02-activity.png
-            adb shell input tap $((WIDTH * 5 / 8)) "$TAP_Y"
+            adb exec-out screencap -p > screenshots/02-activity.png || true
+            adb shell input tap $((WIDTH * 5 / 8)) "$TAP_Y" || true
             sleep 2
-            adb exec-out screencap -p > screenshots/03-review.png
-            adb shell input tap $((WIDTH * 7 / 8)) "$TAP_Y"
+            adb exec-out screencap -p > screenshots/03-review.png || true
+            adb shell input tap $((WIDTH * 7 / 8)) "$TAP_Y" || true
             sleep 2
-            adb exec-out screencap -p > screenshots/04-insights.png
+            adb exec-out screencap -p > screenshots/04-insights.png || true
 
-      - name: Upload screenshot set
+            adb shell uiautomator dump /sdcard/window.xml || true
+            adb pull /sdcard/window.xml diagnostics/window.xml || true
+
+            test -s screenshots/00-prototype-baseline.png
+            test -s screenshots/01-overview.png
+            test -s screenshots/02-activity.png
+            test -s screenshots/03-review.png
+            test -s screenshots/04-insights.png
+
+      - name: Upload screenshot and emulator diagnostics
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ledgerlens-ui-screenshots-${{ github.sha }}
-          path: screenshots/*.png
+          path: |
+            screenshots/
+            diagnostics/
           if-no-files-found: error
           retention-days: 30
+
+      - name: Enforce capture result
+        if: always()
+        run: test "${{ steps.capture.outcome }}" = "success"

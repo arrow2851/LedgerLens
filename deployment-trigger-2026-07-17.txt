@@ -1,0 +1,1 @@
+Trigger GitHub Pages branch deployment after gh-pages was enabled as the publishing source.

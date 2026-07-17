@@ -3,7 +3,9 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <application>
-        <activity android:name=".LedgerLensActivity">
+        <activity
+            android:name=".LedgerLensActivity"
+            android:exported="true">
             <intent-filter tools:node="removeAll" />
         </activity>
 

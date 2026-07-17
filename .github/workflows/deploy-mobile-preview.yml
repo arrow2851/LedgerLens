@@ -9,6 +9,7 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  statuses: write
 
 concurrency:
   group: ledgerlens-mobile-preview
@@ -22,17 +23,57 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: mockups/mobile-preview
+
       - name: Build static preview
         run: |
           mkdir -p _site
           gzip -dc mobile-preview/site.html.gz > _site/index.html
           touch _site/.nojekyll
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4
         with:
           path: _site
+
       - name: Deploy Pages
         id: deployment
+        continue-on-error: true
         uses: actions/deploy-pages@v4
+
+      - name: Publish deployment result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_OUTCOME: ${{ steps.deployment.outcome }}
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+          SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ "$DEPLOY_OUTCOME" = "success" ]; then
+            STATE="success"
+            DESCRIPTION="LedgerLens mobile preview deployed"
+            TARGET_URL="$PAGE_URL"
+          else
+            STATE="failure"
+            DESCRIPTION="LedgerLens mobile preview deployment failed"
+            TARGET_URL="https://github.com/$REPOSITORY/actions"
+          fi
+
+          jq -n \
+            --arg state "$STATE" \
+            --arg target_url "$TARGET_URL" \
+            --arg description "$DESCRIPTION" \
+            --arg context "pages/mobile-preview" \
+            '{state:$state,target_url:$target_url,description:$description,context:$context}' \
+          | curl --fail-with-body \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$REPOSITORY/statuses/$SHA" \
+              -d @-
+
+          test "$DEPLOY_OUTCOME" = "success"

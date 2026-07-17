@@ -103,13 +103,10 @@ class MerchantReviewDomainTest {
     }
 
     @Test
-    fun personToPersonMerchantDefaultRequiresReview() {
+    fun merchantCategoryDefaultsDoNotChangeTreatment() {
         val rule = buildMerchantDefaultRule(
             merchantName = "Omar",
-            option = CategoryOption(
-                categoryName = "Person to Person",
-                accountingTreatment = TransactionTreatments.PERSON_TO_PERSON
-            ),
+            option = CategoryOption(categoryName = "Gifts & Giving"),
             now = 2_000
         )
         val updated = applyMerchantCategoryToTransaction(
@@ -117,19 +114,18 @@ class MerchantReviewDomainTest {
                 id = 1,
                 merchant = "Omar",
                 transactionType = TransactionTreatments.PERSON_TO_PERSON,
-                excludedFromSpending = true
+                excludedFromSpending = false
             ),
             merchantNames = setOf("Omar"),
-            option = CategoryOption(
-                categoryName = "Person to Person",
-                accountingTreatment = TransactionTreatments.PERSON_TO_PERSON
-            ),
+            option = CategoryOption(categoryName = "Gifts & Giving"),
             now = 2_000
         )
 
-        assertTrue(rule.requiresReview)
-        assertEquals("NEEDS_REVIEW", updated.reviewStatus)
-        assertTrue(updated.excludedFromSpending)
+        assertEquals(null, rule.transactionType)
+        assertEquals(null, rule.excludedFromSpending)
+        assertEquals(TransactionTreatments.PERSON_TO_PERSON, updated.accountingTreatment)
+        assertEquals(false, updated.excludedFromSpending)
+        assertEquals("Gifts & Giving", updated.categoryName)
     }
 
     @Test

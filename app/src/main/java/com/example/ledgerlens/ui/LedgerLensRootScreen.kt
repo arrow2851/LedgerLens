@@ -55,6 +55,7 @@ import com.example.ledgerlens.data.entity.FinancialSourceEntity
 import com.example.ledgerlens.data.entity.RawAlertEntity
 import com.example.ledgerlens.data.entity.TransactionEntity
 import com.example.ledgerlens.data.entity.TransactionRuleEntity
+import com.example.ledgerlens.domain.ReviewStatus
 import com.example.ledgerlens.domain.TransactionTreatments
 import com.example.ledgerlens.domain.merchants.applyMerchantCategoryBulk
 import com.example.ledgerlens.domain.parser.ParseMode
@@ -175,7 +176,7 @@ fun buildMerchantAliasDraftForTransaction(
         categoryName = transaction.categoryName,
         applyTreatment = includeTreatment,
         transactionType = transaction.accountingTreatment,
-        requiresReview = transaction.reviewStatus == "NEEDS_REVIEW"
+        requiresReview = transaction.reviewStatus == ReviewStatus.NEEDS_REVIEW
     )
 }
 
@@ -708,7 +709,7 @@ fun LedgerLensAppRoot(
             },
             onOpenParserRuleEditor = { draft ->
                 parserRuleEditorRequest = ParserRuleEditorRequest(
-                    title = "Fix parser rule",
+                    title = "Teach the app to recognise this sender",
                     draft = draft
                 )
             }

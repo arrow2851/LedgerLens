@@ -3,6 +3,7 @@ package com.example.ledgerlens.domain.rules
 import com.example.ledgerlens.data.entity.RawAlertEntity
 import com.example.ledgerlens.data.entity.TransactionEntity
 import com.example.ledgerlens.data.entity.TransactionRuleEntity
+import com.example.ledgerlens.domain.ReviewStatus
 import com.example.ledgerlens.domain.TransactionTreatments
 import java.util.Locale
 
@@ -40,7 +41,7 @@ fun applyRulesToTransaction(
             transactionType = if (!updated.treatmentUserEdited) ruleTreatment else updated.transactionType,
             accountingTreatment = if (!updated.treatmentUserEdited) ruleTreatment else updated.accountingTreatment,
             reviewStatus = when {
-                rule.requiresReview -> "NEEDS_REVIEW"
+                rule.requiresReview -> ReviewStatus.NEEDS_REVIEW
                 rule.reviewStatus != null -> rule.reviewStatus
                 else -> updated.reviewStatus
             },
@@ -77,22 +78,24 @@ fun applyRulesToTransaction(
             } else {
                 updated.categoryName
             }
+            val appliesExplicitTreatment = !merchantRule.transactionType.isNullOrBlank() ||
+                merchantRule.excludedFromSpending != null
 
             updated = updated.copy(
                 merchantRaw = if (!updated.merchantUserEdited) merchantRule.merchantName ?: updated.merchantRaw else updated.merchantRaw,
                 displayMerchantName = if (!updated.merchantUserEdited) merchantRule.merchantName ?: updated.displayMerchantName else updated.displayMerchantName,
                 categoryName = categoryName,
-                transactionType = if (!updated.treatmentUserEdited) merchantTreatment else updated.transactionType,
-                accountingTreatment = if (!updated.treatmentUserEdited) merchantTreatment else updated.accountingTreatment,
-                excludedFromSpending = if (!updated.treatmentUserEdited) {
+                transactionType = if (!updated.treatmentUserEdited && appliesExplicitTreatment) merchantTreatment else updated.transactionType,
+                accountingTreatment = if (!updated.treatmentUserEdited && appliesExplicitTreatment) merchantTreatment else updated.accountingTreatment,
+                excludedFromSpending = if (!updated.treatmentUserEdited && appliesExplicitTreatment) {
                     merchantRule.excludedFromSpending
                         ?: TransactionTreatments.defaultExcludedFromSpending(merchantTreatment)
                 } else {
                     updated.excludedFromSpending
                 },
                 reviewStatus = when {
-                    merchantRule.requiresReview -> "NEEDS_REVIEW"
-                    !categoryName.isNullOrBlank() && updated.reviewStatus == "NEEDS_REVIEW" -> "AUTO_PARSED"
+                    merchantRule.requiresReview -> ReviewStatus.NEEDS_REVIEW
+                    !categoryName.isNullOrBlank() && updated.reviewStatus == ReviewStatus.NEEDS_REVIEW -> ReviewStatus.AUTO_PARSED
                     else -> updated.reviewStatus
                 },
                 updatedAtEpochMs = System.currentTimeMillis()
@@ -139,5 +142,9 @@ private fun TransactionRuleEntity.shouldApplyCategoryTo(treatment: String): Bool
     if (!transactionType.isNullOrBlank()) {
         return true
     }
-    return treatment == TransactionTreatments.EXPENSE
+    return treatment in setOf(
+        TransactionTreatments.EXPENSE,
+        TransactionTreatments.PERSON_TO_PERSON,
+        TransactionTreatments.POSSIBLE_PAYMENT_TRANSFER
+    )
 }

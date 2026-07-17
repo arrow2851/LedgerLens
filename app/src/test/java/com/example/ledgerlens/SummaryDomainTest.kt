@@ -43,8 +43,8 @@ class SummaryDomainTest {
                 merchant = "Mom",
                 amountCents = 2500,
                 treatment = TransactionTreatments.REIMBURSEMENT,
-                excludedFromSpending = false,
-                categoryName = "Bills & Utilities"
+                excludedFromSpending = true,
+                categoryName = "Utilities"
             )
         )
 
@@ -54,9 +54,8 @@ class SummaryDomainTest {
             endEpochMs = 3_000
         )
 
-        assertEquals(2, expenses.size)
+        assertEquals(1, expenses.size)
         assertTrue(expenses.any { it.displayMerchantName == "Target" })
-        assertTrue(expenses.any { it.displayMerchantName == "Mom" })
     }
 
     @Test
@@ -180,7 +179,7 @@ class SummaryDomainTest {
                 merchant = "Zelle - Omar",
                 amountCents = 2500,
                 treatment = TransactionTreatments.PERSON_TO_PERSON,
-                excludedFromSpending = true
+                excludedFromSpending = false
             ),
             transaction(
                 id = 2,
@@ -205,6 +204,7 @@ class SummaryDomainTest {
         assertTrue(summaries.any { it.merchantName == "Target" })
         assertEquals(0L, summaries.first { it.merchantName == "Payroll" }.spendingAmountCents)
         assertEquals(100000L, summaries.first { it.merchantName == "Payroll" }.totalAmountCents)
+        assertEquals(2500L, summaries.first { it.merchantName == "Zelle - Omar" }.spendingAmountCents)
     }
 
     @Test
@@ -216,7 +216,7 @@ class SummaryDomainTest {
                 amountCents = 2200,
                 treatment = TransactionTreatments.REIMBURSEMENT,
                 excludedFromSpending = false,
-                categoryName = "Bills & Utilities",
+                categoryName = "Utilities",
                 spendingMerchantName = "T-Mobile"
             )
         )
@@ -229,7 +229,7 @@ class SummaryDomainTest {
     }
 
     @Test
-    fun spendingImpactCentsHandlesReimbursementsAndZeroTreatments() {
+    fun spendingImpactCentsHandlesTransferLikeTreatmentsAndOffsets() {
         assertEquals(
             1200L,
             TransactionTreatments.spendingImpactCents(TransactionTreatments.EXPENSE, false, 1200)
@@ -243,8 +243,12 @@ class SummaryDomainTest {
             TransactionTreatments.spendingImpactCents(TransactionTreatments.REIMBURSEMENT, false, 1200)
         )
         assertEquals(
-            0L,
-            TransactionTreatments.spendingImpactCents(TransactionTreatments.PERSON_TO_PERSON, true, 1200)
+            1200L,
+            TransactionTreatments.spendingImpactCents(TransactionTreatments.PERSON_TO_PERSON, false, 1200)
+        )
+        assertEquals(
+            1200L,
+            TransactionTreatments.spendingImpactCents(TransactionTreatments.POSSIBLE_PAYMENT_TRANSFER, false, 1200)
         )
         assertEquals(
             0L,
@@ -265,8 +269,8 @@ class SummaryDomainTest {
     }
 
     @Test
-    fun reimbursementDefaultsIntoSpendingView() {
-        assertFalse(TransactionTreatments.defaultExcludedFromSpending(TransactionTreatments.REIMBURSEMENT))
+    fun reimbursementDefaultsOutsideSpendingView() {
+        assertTrue(TransactionTreatments.defaultExcludedFromSpending(TransactionTreatments.REIMBURSEMENT))
         assertEquals(
             -3500L,
             TransactionTreatments.spendingImpactCents(TransactionTreatments.REIMBURSEMENT, false, 3500)

@@ -54,6 +54,7 @@ import com.example.ledgerlens.data.entity.FinancialSourceEntity
 import com.example.ledgerlens.data.entity.RawAlertEntity
 import com.example.ledgerlens.data.entity.TransactionEntity
 import com.example.ledgerlens.data.entity.TransactionRuleEntity
+import com.example.ledgerlens.domain.ReviewStatus
 import com.example.ledgerlens.domain.TransactionTreatments
 import com.example.ledgerlens.domain.merchants.applyMerchantCategoryBulk
 import com.example.ledgerlens.domain.parser.ParseRunResult
@@ -114,12 +115,13 @@ fun defaultReviewQueueFilter(transactions: List<TransactionEntity>): ReviewQueue
     val issueTransactions = transactions.filter { hasAnyReviewIssue(it) }
     return when {
         transactions.any { hasMissingCategory(it) } -> ReviewQueueFilter.MISSING_CATEGORY
-        transactions.any { it.reviewStatus == "NEEDS_REVIEW" } -> ReviewQueueFilter.NEEDS_REVIEW
+        transactions.any { it.reviewStatus == ReviewStatus.NEEDS_REVIEW } -> ReviewQueueFilter.NEEDS_REVIEW
         issueTransactions.any { hasLowConfidence(it) } -> ReviewQueueFilter.LOW_CONFIDENCE
         issueTransactions.any {
             it.accountingTreatment in setOf(
                 TransactionTreatments.PERSON_TO_PERSON,
                 TransactionTreatments.TRANSFER,
+                TransactionTreatments.POSSIBLE_PAYMENT_TRANSFER,
                 TransactionTreatments.REIMBURSEMENT
             )
         } -> ReviewQueueFilter.POSSIBLE_TRANSFERS
@@ -160,7 +162,7 @@ fun ReviewQueueScreen(
 
     val needsReviewTransactions = remember(transactions) {
         transactions
-            .filter { it.reviewStatus == "NEEDS_REVIEW" }
+            .filter { it.reviewStatus == ReviewStatus.NEEDS_REVIEW }
             .sortedByDescending { it.occurredAtEpochMs }
     }
 
@@ -176,6 +178,7 @@ fun ReviewQueueScreen(
                 it.accountingTreatment in setOf(
                     TransactionTreatments.PERSON_TO_PERSON,
                     TransactionTreatments.TRANSFER,
+                    TransactionTreatments.POSSIBLE_PAYMENT_TRANSFER,
                     TransactionTreatments.REIMBURSEMENT
                 ) && hasAnyReviewIssue(it)
             }
@@ -209,7 +212,7 @@ fun ReviewQueueScreen(
         }
     }
 
-    val needsReviewCount = transactions.count { it.reviewStatus == "NEEDS_REVIEW" }
+    val needsReviewCount = transactions.count { it.reviewStatus == ReviewStatus.NEEDS_REVIEW }
     val missingMerchantCount = transactions.count { hasMissingMerchant(it) }
     val missingCategoryCount = transactions.count { hasMissingCategory(it) }
     val lowConfidenceCount = transactions.count { hasLowConfidence(it) }
@@ -236,7 +239,7 @@ fun ReviewQueueScreen(
         ReviewQueueFilter.NEEDS_REVIEW -> "Transactions need review"
         ReviewQueueFilter.MISSING_MERCHANT -> "Missing merchant"
         ReviewQueueFilter.MISSING_CATEGORY -> "Uncategorized spending"
-        ReviewQueueFilter.POSSIBLE_TRANSFERS -> "Possible transfers"
+        ReviewQueueFilter.POSSIBLE_TRANSFERS -> "Possible payments"
         ReviewQueueFilter.LOW_CONFIDENCE -> "Needs confirmation"
         null -> null
     }
@@ -310,8 +313,8 @@ fun ReviewQueueScreen(
                 item {
                     ReviewTaskCard(
                         icon = "T",
-                        title = "Possible transfers",
-                        description = "Check person-to-person items, reimbursements, and transfers.",
+                        title = "Possible payments",
+                        description = "Check person-to-person items, possible payments, reimbursements, and transfers.",
                         metric = "${possibleTransferTransactions.size} transactions",
                         actionText = "Review items",
                         accentColor = Color(0xFF33A564),
@@ -709,7 +712,7 @@ fun ReviewTransactionCard(
     }
 
     val issues = buildList {
-        if (transaction.reviewStatus == "NEEDS_REVIEW") add("Needs review")
+        if (transaction.reviewStatus == ReviewStatus.NEEDS_REVIEW) add("Needs review")
         if (hasMissingMerchant(transaction)) add("Missing merchant")
         if (hasMissingCategory(transaction)) add("Missing category")
         if (hasLowConfidence(transaction)) add("Needs confirmation")

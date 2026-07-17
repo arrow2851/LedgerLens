@@ -53,6 +53,8 @@ import com.example.ledgerlens.data.entity.FinancialSourceEntity
 import com.example.ledgerlens.data.entity.RawAlertEntity
 import com.example.ledgerlens.data.entity.TransactionEntity
 import com.example.ledgerlens.data.entity.TransactionRuleEntity
+import com.example.ledgerlens.domain.CategoryPresets
+import com.example.ledgerlens.domain.ReviewStatus
 import com.example.ledgerlens.domain.TransactionTreatments
 import com.example.ledgerlens.domain.merchants.applyMerchantCategoryBulk
 import com.example.ledgerlens.domain.parser.ParseRunResult
@@ -404,19 +406,7 @@ fun MerchantCategoryAssignmentCard(
         mutableStateOf(merchant.primaryTreatment == TransactionTreatments.PERSON_TO_PERSON)
     }
 
-    val presets = listOf(
-        "Groceries",
-        "Restaurants",
-        "Gas",
-        "Shopping",
-        "Bills & Utilities",
-        "Subscriptions",
-        "Healthcare",
-        "Travel",
-        "Charity",
-        "Transfer",
-        "Other"
-    )
+    val presets = CategoryPresets.defaults
 
     Card(
         modifier = Modifier.fillMaxWidth()
@@ -475,7 +465,8 @@ fun MerchantCategoryAssignmentCard(
                 listOf(TransactionTreatments.EXPENSE, TransactionTreatments.INCOME),
                 listOf(TransactionTreatments.REFUND, TransactionTreatments.REIMBURSEMENT),
                 listOf(TransactionTreatments.CREDIT_CARD_PAYMENT, TransactionTreatments.UNKNOWN),
-                listOf(TransactionTreatments.TRANSFER, TransactionTreatments.PERSON_TO_PERSON)
+                listOf(TransactionTreatments.TRANSFER, TransactionTreatments.PERSON_TO_PERSON),
+                listOf(TransactionTreatments.POSSIBLE_PAYMENT_TRANSFER)
             ).forEach { rowItems ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -646,7 +637,7 @@ fun MerchantTransactionCard(
                 )
             }
 
-            if (transaction.reviewStatus == "NEEDS_REVIEW") {
+            if (transaction.reviewStatus == ReviewStatus.NEEDS_REVIEW) {
                 Text(
                     text = "Needs review",
                     style = MaterialTheme.typography.labelSmall

@@ -3,6 +3,7 @@ package com.example.ledgerlens.domain.rules
 import com.example.ledgerlens.data.entity.RawAlertEntity
 import com.example.ledgerlens.data.entity.TransactionEntity
 import com.example.ledgerlens.data.entity.TransactionRuleEntity
+import com.example.ledgerlens.domain.ReviewStatus
 import com.example.ledgerlens.domain.TransactionTreatments
 
 data class MerchantAliasRuleDraft(
@@ -201,10 +202,10 @@ fun applyMerchantAliasRuleToTransaction(
             transaction.excludedFromSpending
         },
         reviewStatus = when {
-            draft.requiresReview -> "NEEDS_REVIEW"
-            transaction.reviewStatus == "NEEDS_REVIEW" &&
+            draft.requiresReview -> ReviewStatus.NEEDS_REVIEW
+            transaction.reviewStatus == ReviewStatus.NEEDS_REVIEW &&
                     !updatedMerchant.isNullOrBlank() &&
-                    (!draft.applyCategory || !updatedCategory.isNullOrBlank()) -> "AUTO_PARSED"
+                    (!draft.applyCategory || !updatedCategory.isNullOrBlank()) -> ReviewStatus.AUTO_PARSED
             else -> transaction.reviewStatus
         },
         updatedAtEpochMs = now

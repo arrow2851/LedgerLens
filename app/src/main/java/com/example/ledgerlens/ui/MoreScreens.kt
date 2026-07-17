@@ -581,8 +581,8 @@ fun HelpPanel() {
             )
             MoreBodyText("Sync SMS alerts imports financial-looking inbox messages and updates transactions from senders you approved.")
             MoreBodyText("Banks & cards lets you choose which SMS senders LedgerLens should use. Ignored senders are not parsed in future syncs.")
-            MoreBodyText("Review is where you fix merchants, categories, uncertain transactions, possible transfers, card payments, refunds, and reimbursements.")
-            MoreBodyText("Spending includes expenses and subtracts refunds/reimbursements. Transfers, card payments, income, and excluded items do not inflate spending.")
+            MoreBodyText("Review is where you fix merchants, categories, uncertain transactions, possible payments, card payments, refunds, and reimbursements.")
+            MoreBodyText("Spending includes expenses, outgoing person-to-person payments, and possible outgoing payments by default. Income, confirmed transfers, card payments, and excluded items stay out.")
             MoreBodyText("Export transactions creates a CSV without original SMS text. Parser diagnostics are for troubleshooting and live under Advanced.")
         }
     }

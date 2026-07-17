@@ -751,17 +751,16 @@ private fun CategoryPickerSheet(
     val commonOptions = remember(cleanOptions) {
         val preferred = listOf(
             "Groceries",
-            "Restaurants",
+            "Dining & Restaurants",
             "Subscriptions",
-            "Transportation",
-            "Bills & Utilities",
+            "Gas & Transport",
+            "Utilities",
             "Shopping",
             "Other"
         )
         preferred.mapNotNull { category ->
             cleanOptions.firstOrNull {
-                it.categoryName.equals(category, ignoreCase = true) ||
-                        (category == "Transportation" && it.categoryName.equals("Gas", ignoreCase = true))
+                it.categoryName.equals(category, ignoreCase = true)
             }
         }.distinctBy { it.categoryName.lowercase(Locale.US) }
     }

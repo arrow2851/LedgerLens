@@ -576,6 +576,7 @@ fun TreatmentSelector(
     selectedTreatment: String,
     onTreatmentSelected: (String) -> Unit,
     treatments: List<String>,
+    labelForTreatment: (String) -> String = ::treatmentLabel,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -614,7 +615,7 @@ fun TreatmentSelector(
                             verticalArrangement = Arrangement.spacedBy(3.dp)
                         ) {
                             Text(
-                                text = treatmentLabel(treatment),
+                                text = labelForTreatment(treatment),
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                                 maxLines = 1,

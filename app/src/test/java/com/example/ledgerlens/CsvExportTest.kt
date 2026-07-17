@@ -164,7 +164,7 @@ class CsvExportTest {
             parserNotes = notes,
             createdAtEpochMs = 1_700_000_000_000,
             updatedAtEpochMs = 1_700_000_000_000,
-            categoryName = "Restaurants"
+            categoryName = "Dining & Restaurants"
         )
     }
 }

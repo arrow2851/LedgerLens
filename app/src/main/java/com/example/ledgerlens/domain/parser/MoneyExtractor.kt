@@ -20,13 +20,13 @@ object MoneyExtractor {
             "(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)" +
             "(?:\\.[0-9]{1,2})?" +
             "(?:\\s*(?:usd|inr))?" +
-            "(?![0-9.])"
+            "(?!\\.[0-9]|[0-9])"
 
     private val amountRegex = Regex(
         pattern =
             "(?i)(\\$|$RUPEE_SYMBOL|usd|rs\\.?|inr)?\\s*" +
                 "((?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\\.[0-9]{1,2})?)" +
-                "(?:\\s*(usd|inr))?(?![0-9.])"
+                "(?:\\s*(usd|inr))?(?!\\.[0-9]|[0-9])"
     )
 
     fun findAmounts(text: String): List<MoneyAmountCandidate> {

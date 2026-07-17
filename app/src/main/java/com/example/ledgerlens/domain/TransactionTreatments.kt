@@ -8,12 +8,20 @@ object TransactionTreatments {
     const val CREDIT_CARD_PAYMENT = "CREDIT_CARD_PAYMENT"
     const val TRANSFER = "TRANSFER"
     const val PERSON_TO_PERSON = "PERSON_TO_PERSON"
+    const val POSSIBLE_PAYMENT_TRANSFER = "POSSIBLE_PAYMENT_TRANSFER"
     const val UNKNOWN = "UNKNOWN"
+
+    enum class Direction {
+        OUTGOING,
+        INCOMING,
+        UNKNOWN
+    }
 
     val movementTreatments = setOf(
         CREDIT_CARD_PAYMENT,
         TRANSFER,
-        PERSON_TO_PERSON
+        PERSON_TO_PERSON,
+        POSSIBLE_PAYMENT_TRANSFER
     )
 
     fun countsAsSpending(treatment: String, excludedFromSpending: Boolean): Boolean {
@@ -40,14 +48,31 @@ object TransactionTreatments {
         if (excludedFromSpending) return 0
 
         return when (treatment) {
-            EXPENSE -> amountCents
+            EXPENSE,
+            PERSON_TO_PERSON,
+            POSSIBLE_PAYMENT_TRANSFER,
+            UNKNOWN -> amountCents
             REFUND,
             REIMBURSEMENT -> -amountCents
             else -> 0
         }
     }
 
-    fun defaultExcludedFromSpending(treatment: String): Boolean {
-        return treatment !in setOf(EXPENSE, REFUND, REIMBURSEMENT)
+    fun defaultExcludedFromSpending(
+        treatment: String,
+        direction: Direction = Direction.OUTGOING
+    ): Boolean {
+        return when (treatment) {
+            EXPENSE -> false
+            PERSON_TO_PERSON,
+            POSSIBLE_PAYMENT_TRANSFER,
+            UNKNOWN -> direction != Direction.OUTGOING
+            REFUND,
+            REIMBURSEMENT,
+            INCOME,
+            CREDIT_CARD_PAYMENT,
+            TRANSFER -> true
+            else -> true
+        }
     }
 }

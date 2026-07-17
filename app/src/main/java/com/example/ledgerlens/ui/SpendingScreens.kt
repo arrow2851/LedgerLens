@@ -53,6 +53,7 @@ import com.example.ledgerlens.data.entity.FinancialSourceEntity
 import com.example.ledgerlens.data.entity.RawAlertEntity
 import com.example.ledgerlens.data.entity.TransactionEntity
 import com.example.ledgerlens.data.entity.TransactionRuleEntity
+import com.example.ledgerlens.domain.ReviewStatus
 import com.example.ledgerlens.domain.TransactionTreatments
 import com.example.ledgerlens.domain.merchants.applyMerchantCategoryBulk
 import com.example.ledgerlens.domain.parser.ParseRunResult
@@ -1022,14 +1023,18 @@ fun categoryGlyph(categoryName: String): String {
     return when {
         "uncategorized" in normalized || "unassigned" in normalized -> "?"
         "grocer" in normalized -> "G"
-        "restaurant" in normalized || "dining" in normalized -> "R"
-        "subscription" in normalized -> "S"
+        "dining" in normalized || "restaurant" in normalized -> "D"
+        "subscri" in normalized -> "S"
         "transport" in normalized || "gas" in normalized -> "T"
-        "bill" in normalized || "utilit" in normalized -> "B"
-        "shopping" in normalized -> "S"
+        "utilit" in normalized -> "U"
+        "bill" in normalized -> "B"
+        "shopping" in normalized -> "P"
         "health" in normalized -> "H"
-        "travel" in normalized -> "T"
-        "home" in normalized -> "H"
+        "travel" in normalized -> "V"
+        "home" in normalized -> "M"
+        "entertain" in normalized -> "E"
+        "personal" in normalized || "charity" in normalized -> "C"
+        "insur" in normalized -> "I"
         else -> categoryName.trim().take(1).uppercase(Locale.US).ifBlank { "O" }
     }
 }
@@ -1217,7 +1222,7 @@ fun CategoryTransactionCard(
             formatter.format(Date(transaction.occurredAtEpochMs))
         },
         metadataText = displayCategoryName(transaction.categoryName),
-        pillText = if (transaction.reviewStatus == "NEEDS_REVIEW") "Review" else null,
+        pillText = if (transaction.reviewStatus == ReviewStatus.NEEDS_REVIEW) "Review" else null,
         trailingText = formatSignedMoney(spendingImpact, transaction.currency),
         leadingText = transaction.displayMerchantName?.take(1) ?: transaction.currency.take(1),
         onClick = onClick

@@ -34,12 +34,12 @@ class TransactionRuleApplicationTest {
     }
 
     @Test
-    fun merchantDefaultDoesNotApplyExpenseCategoryToPersonToPersonByDefault() {
+    fun merchantDefaultCanApplyCategoryWithoutChangingPersonToPersonTreatment() {
         val rawAlert = rawAlert("Zelle transfer $42.10 to Walmart.")
         val transaction = transaction(
             merchant = "Walmart",
             transactionType = TransactionTreatments.PERSON_TO_PERSON,
-            excludedFromSpending = true
+            excludedFromSpending = false
         )
         val rule = merchantRule(
             merchant = "Walmart",
@@ -53,7 +53,9 @@ class TransactionRuleApplicationTest {
             merchantDefaultRules = listOf(rule)
         )
 
-        assertEquals(null, updated.categoryName)
+        assertEquals("Groceries", updated.categoryName)
+        assertEquals(TransactionTreatments.PERSON_TO_PERSON, updated.accountingTreatment)
+        assertEquals(false, updated.excludedFromSpending)
     }
 
     @Test
@@ -102,12 +104,37 @@ class TransactionRuleApplicationTest {
     }
 
     @Test
+    fun merchantDefaultCategoryRuleDoesNotSilentlyChangeTreatment() {
+        val rawAlert = rawAlert("Chase acct 1234: Payment to Capital One $500.")
+        val transaction = transaction(
+            merchant = "Capital One",
+            transactionType = TransactionTreatments.POSSIBLE_PAYMENT_TRANSFER,
+            excludedFromSpending = false
+        )
+        val rule = merchantRule(
+            merchant = "Capital One",
+            category = "Utilities"
+        )
+
+        val updated = applyRulesToTransaction(
+            transaction = transaction,
+            rawAlert = rawAlert,
+            sourceRules = emptyList(),
+            merchantDefaultRules = listOf(rule)
+        )
+
+        assertEquals("Utilities", updated.categoryName)
+        assertEquals(TransactionTreatments.POSSIBLE_PAYMENT_TRANSFER, updated.accountingTreatment)
+        assertEquals(false, updated.excludedFromSpending)
+    }
+
+    @Test
     fun requiresReviewMerchantRuleDoesNotAutoApplyCategory() {
         val rawAlert = rawAlert("You sent $25.00 to Omar with Zelle.")
         val transaction = transaction(
             merchant = "Omar",
             transactionType = TransactionTreatments.PERSON_TO_PERSON,
-            excludedFromSpending = true
+            excludedFromSpending = false
         )
         val rule = merchantRule(
             merchant = "Omar",

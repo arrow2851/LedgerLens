@@ -2,6 +2,8 @@ package com.example.ledgerlens.domain.merchants
 
 import com.example.ledgerlens.data.entity.TransactionEntity
 import com.example.ledgerlens.data.entity.TransactionRuleEntity
+import com.example.ledgerlens.domain.CategoryPresets
+import com.example.ledgerlens.domain.ReviewStatus
 import com.example.ledgerlens.domain.TransactionTreatments
 import com.example.ledgerlens.domain.rules.MERCHANT_DEFAULT_RULE_SOURCE_KEY
 import com.example.ledgerlens.domain.rules.RuleKind
@@ -59,25 +61,7 @@ data class MerchantBulkApplyResult(
     val ruleCount: Int
 )
 
-val defaultCategoryOptions = listOf(
-    CategoryOption("Groceries"),
-    CategoryOption("Restaurants"),
-    CategoryOption("Shopping"),
-    CategoryOption("Subscriptions"),
-    CategoryOption("Bills & Utilities"),
-    CategoryOption("Gas"),
-    CategoryOption("Healthcare"),
-    CategoryOption("Travel"),
-    CategoryOption("Entertainment"),
-    CategoryOption("Charity"),
-    CategoryOption("Income", TransactionTreatments.INCOME),
-    CategoryOption("Refund", TransactionTreatments.REFUND),
-    CategoryOption("Reimbursement", TransactionTreatments.REIMBURSEMENT),
-    CategoryOption("Transfer", TransactionTreatments.TRANSFER),
-    CategoryOption("Credit Card Payment", TransactionTreatments.CREDIT_CARD_PAYMENT),
-    CategoryOption("Person to Person", TransactionTreatments.PERSON_TO_PERSON),
-    CategoryOption("Other")
-)
+val defaultCategoryOptions = CategoryPresets.defaults.map(::CategoryOption)
 
 fun buildCategoryCatalog(
     transactions: List<TransactionEntity>,
@@ -90,7 +74,7 @@ fun buildCategoryCatalog(
         if (option.categoryName.isBlank()) return
         if (isVirtualUncategorizedCategory(option.categoryName)) return
         if (option.categoryName.equals("General", ignoreCase = true)) return
-        val key = categoryKey(option.categoryName, option.accountingTreatment)
+        val key = categoryKey(option.categoryName)
         optionsByKey.putIfAbsent(key, option)
     }
 
@@ -103,7 +87,6 @@ fun buildCategoryCatalog(
             add(
                 CategoryOption(
                     categoryName = transaction.categoryName.orEmpty(),
-                    accountingTreatment = transaction.accountingTreatment,
                     source = "Existing"
                 )
             )
@@ -115,9 +98,6 @@ fun buildCategoryCatalog(
             add(
                 CategoryOption(
                     categoryName = rule.categoryName.orEmpty(),
-                    accountingTreatment = rule.transactionType
-                        ?: rule.appliesToTreatment
-                        ?: TransactionTreatments.EXPENSE,
                     source = "Rule"
                 )
             )
@@ -167,7 +147,7 @@ fun buildMerchantReviewItems(
 
 fun merchantReviewStats(transactions: List<TransactionEntity>): MerchantReviewStats {
     return MerchantReviewStats(
-        needsReviewCount = transactions.count { it.reviewStatus == "NEEDS_REVIEW" },
+        needsReviewCount = transactions.count { it.reviewStatus == ReviewStatus.NEEDS_REVIEW },
         missingMerchantCount = transactions.count { hasMissingMerchant(it) },
         missingCategoryCount = transactions.count { hasMissingCategory(it) },
         lowConfidenceCount = transactions.count { hasLowConfidence(it) }
@@ -186,7 +166,6 @@ fun buildMerchantDefaultRule(
     option: CategoryOption,
     now: Long = System.currentTimeMillis()
 ): TransactionRuleEntity {
-    val requiresReview = option.accountingTreatment == TransactionTreatments.PERSON_TO_PERSON
     return TransactionRuleEntity(
         sourceKey = MERCHANT_DEFAULT_RULE_SOURCE_KEY,
         matchPhrase = merchantName,
@@ -194,11 +173,11 @@ fun buildMerchantDefaultRule(
         ruleKind = RuleKind.MERCHANT_DEFAULT,
         merchantName = merchantName,
         categoryName = option.categoryName,
-        transactionType = option.accountingTreatment,
-        excludedFromSpending = TransactionTreatments.defaultExcludedFromSpending(option.accountingTreatment),
+        transactionType = null,
+        excludedFromSpending = null,
         appliesToTreatment = null,
         applyCategoryAutomatically = true,
-        requiresReview = requiresReview,
+        requiresReview = false,
         active = true,
         createdAtEpochMs = now,
         updatedAtEpochMs = now
@@ -217,25 +196,15 @@ fun applyMerchantCategoryToTransaction(
     }
 
     val categoryName = if (!transaction.categoryUserEdited) option.categoryName else transaction.categoryName
-    val treatment = if (!transaction.treatmentUserEdited) option.accountingTreatment else transaction.accountingTreatment
-    val requiresReview = option.accountingTreatment == TransactionTreatments.PERSON_TO_PERSON
     val reviewStatus = when {
-        requiresReview -> "NEEDS_REVIEW"
-        transaction.reviewStatus == "NEEDS_REVIEW" &&
-                !categoryName.isNullOrBlank() &&
-                merchant.isNotBlank() -> "AUTO_PARSED"
+        transaction.reviewStatus == ReviewStatus.NEEDS_REVIEW &&
+            !categoryName.isNullOrBlank() &&
+            merchant.isNotBlank() -> ReviewStatus.AUTO_PARSED
         else -> transaction.reviewStatus
     }
 
     return transaction.copy(
         categoryName = categoryName,
-        transactionType = if (!transaction.treatmentUserEdited) treatment else transaction.transactionType,
-        accountingTreatment = treatment,
-        excludedFromSpending = if (!transaction.treatmentUserEdited) {
-            TransactionTreatments.defaultExcludedFromSpending(treatment)
-        } else {
-            transaction.excludedFromSpending
-        },
         reviewStatus = reviewStatus,
         updatedAtEpochMs = now
     )
@@ -262,22 +231,6 @@ private fun suggestCategoryForMerchant(
         )
     }
 
-    if (merchant.primaryTreatment == TransactionTreatments.INCOME) {
-        return MerchantCategorySuggestion("Income", 0.84, "Income treatment")
-    }
-    if (merchant.primaryTreatment == TransactionTreatments.CREDIT_CARD_PAYMENT) {
-        return MerchantCategorySuggestion("Credit Card Payment", 0.88, "Payment treatment")
-    }
-    if (merchant.primaryTreatment == TransactionTreatments.REIMBURSEMENT) {
-        return MerchantCategorySuggestion("Reimbursement", 0.84, "Reimbursement treatment")
-    }
-    if (merchant.primaryTreatment == TransactionTreatments.TRANSFER) {
-        return MerchantCategorySuggestion("Transfer", 0.82, "Transfer treatment")
-    }
-    if (merchant.primaryTreatment == TransactionTreatments.PERSON_TO_PERSON) {
-        return MerchantCategorySuggestion("Person to Person", 0.70, "Person-to-person treatment")
-    }
-
     val haystack = (merchant.merchantName + " " + merchantTransactions.joinToString(" ") {
         listOfNotNull(it.parserNotes, it.sourceInstitution, it.categoryName).joinToString(" ")
     }).lowercase(Locale.US)
@@ -287,10 +240,10 @@ private fun suggestCategoryForMerchant(
             MerchantCategorySuggestion("Groceries", 0.78, "Merchant keyword")
 
         containsAny(haystack, "restaurant", "cafe", "coffee", "starbucks", "mcdonald", "chipotle", "doordash", "uber eats", "grubhub") ->
-            MerchantCategorySuggestion("Restaurants", 0.78, "Merchant keyword")
+            MerchantCategorySuggestion("Dining & Restaurants", 0.78, "Merchant keyword")
 
         containsAny(haystack, "shell", "exxon", "chevron", "bp ", "mobil", "speedway", "circle k", "gas", "fuel") ->
-            MerchantCategorySuggestion("Gas", 0.78, "Merchant keyword")
+            MerchantCategorySuggestion("Gas & Transport", 0.78, "Merchant keyword")
 
         containsAny(haystack, "netflix", "spotify", "hulu", "disney", "youtube", "openai", "chatgpt", "google", "apple.com/bill") ->
             MerchantCategorySuggestion("Subscriptions", 0.74, "Merchant keyword")
@@ -299,7 +252,7 @@ private fun suggestCategoryForMerchant(
             MerchantCategorySuggestion("Healthcare", 0.74, "Merchant keyword")
 
         containsAny(haystack, "electric", "utility", "water", "internet", "phone", "insurance") ->
-            MerchantCategorySuggestion("Bills & Utilities", 0.72, "Merchant keyword")
+            MerchantCategorySuggestion("Utilities", 0.72, "Merchant keyword")
 
         containsAny(haystack, "masjid", "mosque", "islamic", "donation", "charity", "zakat", "sadaqah") ->
             MerchantCategorySuggestion("Charity", 0.78, "Merchant keyword")
@@ -308,12 +261,8 @@ private fun suggestCategoryForMerchant(
     }
 }
 
-private fun categoryKey(
-    categoryName: String,
-    treatment: String
-): String {
-    return listOf(categoryName, treatment)
-        .joinToString("|") { it.trim().lowercase(Locale.US) }
+private fun categoryKey(categoryName: String): String {
+    return categoryName.trim().lowercase(Locale.US)
 }
 
 private fun containsAny(text: String, vararg needles: String): Boolean {

@@ -1,6 +1,7 @@
 package com.example.ledgerlens.domain.summary
 
 import com.example.ledgerlens.data.entity.TransactionEntity
+import com.example.ledgerlens.domain.ReviewStatus
 import com.example.ledgerlens.domain.TransactionTreatments
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -273,6 +274,7 @@ fun treatmentLabel(treatment: String): String {
         TransactionTreatments.REIMBURSEMENT -> "Reimbursement"
         TransactionTreatments.CREDIT_CARD_PAYMENT -> "Credit card payment"
         TransactionTreatments.TRANSFER -> "Transfer"
+        TransactionTreatments.POSSIBLE_PAYMENT_TRANSFER -> "Possible payment"
         TransactionTreatments.PERSON_TO_PERSON -> "Person to person"
         else -> "Unknown"
     }
@@ -284,6 +286,7 @@ fun hasMissingMerchant(transaction: TransactionEntity): Boolean {
         TransactionTreatments.REFUND,
         TransactionTreatments.REIMBURSEMENT,
         TransactionTreatments.PERSON_TO_PERSON,
+        TransactionTreatments.POSSIBLE_PAYMENT_TRANSFER,
         TransactionTreatments.CREDIT_CARD_PAYMENT,
         TransactionTreatments.INCOME
     ) &&
@@ -304,7 +307,7 @@ fun hasLowConfidence(transaction: TransactionEntity): Boolean {
 }
 
 fun hasAnyReviewIssue(transaction: TransactionEntity): Boolean {
-    return transaction.reviewStatus == "NEEDS_REVIEW" ||
+    return transaction.reviewStatus == ReviewStatus.NEEDS_REVIEW ||
             hasMissingMerchant(transaction) ||
             hasMissingCategory(transaction) ||
             hasLowConfidence(transaction)

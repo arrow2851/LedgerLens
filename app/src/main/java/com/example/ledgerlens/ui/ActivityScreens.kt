@@ -53,6 +53,7 @@ import com.example.ledgerlens.data.entity.FinancialSourceEntity
 import com.example.ledgerlens.data.entity.RawAlertEntity
 import com.example.ledgerlens.data.entity.TransactionEntity
 import com.example.ledgerlens.data.entity.TransactionRuleEntity
+import com.example.ledgerlens.domain.ReviewStatus
 import com.example.ledgerlens.domain.TransactionTreatments
 import com.example.ledgerlens.domain.merchants.applyMerchantCategoryBulk
 import com.example.ledgerlens.domain.parser.ParseRunResult
@@ -153,7 +154,7 @@ fun TransactionReviewScreen(
             TransactionFilter.ALL -> sortedTransactions
 
             TransactionFilter.NEEDS_REVIEW -> sortedTransactions.filter {
-                it.reviewStatus == "NEEDS_REVIEW"
+                it.reviewStatus == ReviewStatus.NEEDS_REVIEW
             }
 
             TransactionFilter.EXPENSES -> sortedTransactions.filter {
@@ -222,7 +223,7 @@ fun TransactionReviewScreen(
             sortedTransactions
         }
     }
-    val needsReviewCount = visibleTransactionsForCounts.count { it.reviewStatus == "NEEDS_REVIEW" }
+    val needsReviewCount = visibleTransactionsForCounts.count { it.reviewStatus == ReviewStatus.NEEDS_REVIEW }
     val excludedCount = visibleTransactionsForCounts.count {
         !TransactionTreatments.isInSpendingView(
             treatment = it.accountingTreatment,
@@ -500,7 +501,12 @@ fun ActivityTransactionRow(
     val categoryColor = spendingCategoryColor(categoryLabel, 0)
     val merchantColor = merchantAccentColor(merchantName, transaction.id.toInt())
     val sourceLabel = activitySourceLabel(transaction)
-    val needsReview = transaction.reviewStatus == "NEEDS_REVIEW"
+    val needsReview = transaction.reviewStatus == ReviewStatus.NEEDS_REVIEW
+    val showsTreatmentBadge = transaction.accountingTreatment != TransactionTreatments.EXPENSE
+    val outsideSpending = !TransactionTreatments.isInSpendingView(
+        treatment = transaction.accountingTreatment,
+        excludedFromSpending = transaction.excludedFromSpending
+    )
 
     Surface(
         modifier = Modifier
@@ -552,6 +558,18 @@ fun ActivityTransactionRow(
                         ActivitySmallBadge(
                             text = "Needs review",
                             color = Color(0xFFFFA044)
+                        )
+                    }
+                    if (showsTreatmentBadge) {
+                        ActivitySmallBadge(
+                            text = treatmentLabel(transaction.accountingTreatment),
+                            color = Color(0xFF7B8AA0)
+                        )
+                    }
+                    if (outsideSpending && transaction.accountingTreatment == TransactionTreatments.EXPENSE) {
+                        ActivitySmallBadge(
+                            text = "Outside spending",
+                            color = Color(0xFF7B8AA0)
                         )
                     }
                 }

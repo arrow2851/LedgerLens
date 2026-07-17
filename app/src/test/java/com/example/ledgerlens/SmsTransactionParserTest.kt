@@ -25,7 +25,7 @@ class SmsTransactionParserTest {
         assertEquals(TransactionTreatments.EXPENSE, transaction.accountingTreatment)
         assertEquals(1234L, transaction.amountCents)
         assertEquals("Starbucks", transaction.displayMerchantName)
-        assertEquals("Restaurants", transaction.categoryName)
+        assertEquals("Dining & Restaurants", transaction.categoryName)
         assertEquals("1234", transaction.accountHint)
     }
 
@@ -40,7 +40,7 @@ class SmsTransactionParserTest {
     }
 
     @Test
-    fun parseZelleTransferNeedsReviewAndIsExcluded() {
+    fun parseZelleTransferNeedsReviewAndCountsTowardSpending() {
         val transaction = SmsTransactionParser.parse(
             rawAlert = rawAlert("Chase Alert: You sent $25.00 to Omar with Zelle."),
             source = source()
@@ -52,22 +52,18 @@ class SmsTransactionParserTest {
         assertEquals(TransactionTreatments.PERSON_TO_PERSON, transaction.accountingTreatment)
         assertEquals("Omar", transaction.displayMerchantName)
         assertEquals("NEEDS_REVIEW", transaction.reviewStatus)
-        assertTrue(transaction.excludedFromSpending)
+        assertEquals(false, transaction.excludedFromSpending)
         assertTrue(transaction.parserNotes.orEmpty().contains("Zelle"))
     }
 
     @Test
-    fun parseCreditCardPaymentKeepsPaymentTreatment() {
+    fun parseCreditCardPaymentConfirmationIsIgnored() {
         val transaction = SmsTransactionParser.parse(
             rawAlert = rawAlert("Chase Alert: Your credit card payment of $250.00 was made to your card ending 1234."),
             source = source()
         )
 
-        assertNotNull(transaction)
-        transaction!!
-        assertEquals(TransactionTreatments.CREDIT_CARD_PAYMENT, transaction.accountingTreatment)
-        assertTrue(transaction.excludedFromSpending)
-        assertTrue(transaction.parserNotes.orEmpty().contains("not counted in Spending Summary"))
+        assertNull(transaction)
     }
 
     @Test
@@ -113,7 +109,7 @@ class SmsTransactionParserTest {
     }
 
     @Test
-    fun capitalOnePaymentAndScheduledPaymentAreCreditCardPayments() {
+    fun capitalOnePaymentAndScheduledPaymentAreIgnoredConfirmations() {
         val paid = SmsTransactionParser.parse(
             rawAlert = rawAlert(
                 "Capital One Alert: You paid $4,924.10 to your Venture Credit Card (5944) on December 16, 2024. Msg & data rates may apply."
@@ -136,12 +132,8 @@ class SmsTransactionParserTest {
             )
         )
 
-        assertNotNull(paid)
-        assertNotNull(scheduled)
-        assertEquals(TransactionTreatments.CREDIT_CARD_PAYMENT, paid!!.accountingTreatment)
-        assertEquals(TransactionTreatments.CREDIT_CARD_PAYMENT, scheduled!!.accountingTreatment)
-        assertTrue(paid.excludedFromSpending)
-        assertTrue(scheduled.excludedFromSpending)
+        assertNull(paid)
+        assertNull(scheduled)
     }
 
     @Test
@@ -187,9 +179,10 @@ class SmsTransactionParserTest {
 
         assertNotNull(transaction)
         transaction!!
-        assertEquals(TransactionTreatments.TRANSFER, transaction.accountingTreatment)
+        assertEquals(TransactionTreatments.POSSIBLE_PAYMENT_TRANSFER, transaction.accountingTreatment)
         assertEquals("DISCOVER", transaction.displayMerchantName)
-        assertTrue(transaction.excludedFromSpending)
+        assertEquals(false, transaction.excludedFromSpending)
+        assertEquals("NEEDS_REVIEW", transaction.reviewStatus)
     }
 
     @Test
@@ -219,9 +212,10 @@ class SmsTransactionParserTest {
 
         assertNotNull(transaction)
         transaction!!
-        assertEquals(TransactionTreatments.PERSON_TO_PERSON, transaction.accountingTreatment)
+        assertEquals(TransactionTreatments.INCOME, transaction.accountingTreatment)
         assertEquals("ARSHAD QAVI", transaction.displayMerchantName)
         assertEquals("NEEDS_REVIEW", transaction.reviewStatus)
+        assertTrue(transaction.excludedFromSpending)
     }
 
     @Test
@@ -268,8 +262,44 @@ class SmsTransactionParserTest {
         assertEquals("+MALLEPALLY OATM", withdrawal.displayMerchantName)
         assertEquals(TransactionTreatments.INCOME, income!!.accountingTreatment)
         assertEquals(819097L, income.amountCents)
-        assertEquals(TransactionTreatments.TRANSFER, transfer!!.accountingTreatment)
+        assertEquals(TransactionTreatments.POSSIBLE_PAYMENT_TRANSFER, transfer!!.accountingTreatment)
         assertEquals("INR", transfer.currency)
+    }
+
+    @Test
+    fun chaseMentioningCapitalOneKeepsChaseProfileAndTreatsCapitalOneAsPayee() {
+        val transaction = SmsTransactionParser.parse(
+            rawAlert = rawAlert(
+                "Chase acct 1234: Payment to Capital One $500."
+            ),
+            source = source(
+                sourceAddress = "24273",
+                institutionName = "Chase",
+                accountType = "CHECKING"
+            )
+        )
+
+        assertNotNull(transaction)
+        transaction!!
+        assertEquals("Chase", transaction.sourceInstitution)
+        assertEquals("Capital One", transaction.displayMerchantName)
+        assertEquals(TransactionTreatments.POSSIBLE_PAYMENT_TRANSFER, transaction.accountingTreatment)
+        assertEquals(false, transaction.excludedFromSpending)
+        assertEquals("NEEDS_REVIEW", transaction.reviewStatus)
+    }
+
+    @Test
+    fun directRefundDefaultsOutsideSpending() {
+        val transaction = SmsTransactionParser.parse(
+            rawAlert = rawAlert("Refund from Target $23.19."),
+            source = source()
+        )
+
+        assertNotNull(transaction)
+        transaction!!
+        assertEquals(TransactionTreatments.REFUND, transaction.accountingTreatment)
+        assertTrue(transaction.excludedFromSpending)
+        assertEquals("NEEDS_REVIEW", transaction.reviewStatus)
     }
 
     @Test
@@ -303,9 +333,22 @@ class SmsTransactionParserTest {
                 )
             )
 
-            assertNotNull("Fixture should parse: $line", transaction)
-            assertEquals(expectedTreatment, transaction!!.accountingTreatment)
-            assertEquals(expectedMerchant, transaction.displayMerchantName)
+            if (expectedTreatment == TransactionTreatments.CREDIT_CARD_PAYMENT &&
+                institution == "Capital One"
+            ) {
+                assertNull("Capital One payment confirmations should be ignored: $line", transaction)
+            } else if (
+                expectedTreatment == TransactionTreatments.PERSON_TO_PERSON &&
+                rawSmsText.contains("sent you", ignoreCase = true)
+            ) {
+                assertNotNull("Fixture should parse incoming P2P: $line", transaction)
+                assertEquals(TransactionTreatments.INCOME, transaction!!.accountingTreatment)
+                assertEquals(expectedMerchant, transaction.displayMerchantName)
+            } else {
+                assertNotNull("Fixture should parse: $line", transaction)
+                assertEquals(expectedTreatment, transaction!!.accountingTreatment)
+                assertEquals(expectedMerchant, transaction.displayMerchantName)
+            }
         }
     }
 

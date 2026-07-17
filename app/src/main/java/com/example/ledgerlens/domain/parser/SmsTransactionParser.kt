@@ -2,6 +2,7 @@ package com.example.ledgerlens.domain.parser
 
 import com.example.ledgerlens.data.entity.RawAlertEntity
 import com.example.ledgerlens.data.entity.TransactionEntity
+import com.example.ledgerlens.domain.ReviewStatus
 import com.example.ledgerlens.domain.TransactionTreatments
 import java.util.Locale
 import com.example.ledgerlens.data.entity.FinancialSourceEntity
@@ -23,6 +24,7 @@ object SmsTransactionParser {
             val amountCents: Long,
             val currency: String = "USD",
             val accountingTreatment: String,
+            val direction: TransactionTreatments.Direction = TransactionTreatments.Direction.UNKNOWN,
             val merchant: String?,
             val accountHint: String? = null,
             val institution: String,
@@ -43,6 +45,14 @@ object SmsTransactionParser {
         val confidenceBonus: Double = 0.0
     )
 
+    private data class GenericClassification(
+        val treatment: String,
+        val direction: TransactionTreatments.Direction,
+        val shouldIgnore: Boolean = false,
+        val ignoreReason: String? = null,
+        val reviewStatus: String? = null
+    )
+
     fun isNonTransactionAlert(rawAlert: RawAlertEntity): Boolean {
         return FinancialSmsClassifier.isLikelyNonTransactionFinancialAlert(rawAlert.combinedText)
     }
@@ -56,6 +66,9 @@ object SmsTransactionParser {
         if (profileOutcome is ProfileOutcome.Ignored) {
             return profileOutcome.diagnostic.ignoreReason
                 ?: profileOutcome.diagnostic.treatmentReason
+        }
+        if (isIssuerPaymentConfirmation(body, source)) {
+            return "Issuer-side credit card payment confirmation."
         }
         return if (FinancialSmsClassifier.isLikelyNonTransactionFinancialAlert(body)) {
             "Informational financial alert, not a transaction."
@@ -81,6 +94,7 @@ object SmsTransactionParser {
                     amountCents = profileOutcome.amountCents,
                     currency = profileOutcome.currency,
                     accountingTreatment = profileOutcome.accountingTreatment,
+                    direction = profileOutcome.direction,
                     merchant = profileOutcome.merchant,
                     merchantExtraction = profileOutcome.merchant?.let {
                         MerchantExtraction(
@@ -109,11 +123,19 @@ object SmsTransactionParser {
         }
 
         val lower = body.lowercase(Locale.US)
-        if (isNonTransactionAlert(rawAlert)) return null
+        if (isNonTransactionAlert(rawAlert) && looksClearlyInformational(lower)) return null
 
         val amountCents = extractAmountCents(body) ?: return null
 
-        val accountingTreatment = inferAccountingTreatment(lower)
+        val classification = inferGenericClassification(
+            rawAlert = rawAlert,
+            source = source,
+            lower = lower
+        )
+        if (classification.shouldIgnore) {
+            return null
+        }
+        val accountingTreatment = classification.treatment
         val transactionType = accountingTreatment
         val accountHint = extractAccountHint(body)
             ?: source?.accountHint?.takeIf { !it.contains(",") }
@@ -138,11 +160,13 @@ object SmsTransactionParser {
             amountCents = amountCents,
             currency = inferCurrency(body),
             accountingTreatment = transactionType,
+            direction = classification.direction,
             merchant = merchant,
             merchantExtraction = merchantExtraction,
             accountHint = accountHint,
             institution = institution,
             categorySuggestion = categorySuggestion,
+            reviewStatusOverride = classification.reviewStatus,
             diagnostic = ParserDiagnostic(
                 profile = "Generic",
                 patternId = "generic_fallback",
@@ -156,57 +180,126 @@ object SmsTransactionParser {
         return MoneyExtractor.parseAmountToMinorUnits(text)
     }
 
-    private fun inferAccountingTreatment(lower: String): String {
+    private fun inferGenericClassification(
+        rawAlert: RawAlertEntity,
+        source: FinancialSourceEntity?,
+        lower: String
+    ): GenericClassification {
+        if (isIssuerPaymentConfirmation(rawAlert.combinedText, source)) {
+            return GenericClassification(
+                treatment = TransactionTreatments.CREDIT_CARD_PAYMENT,
+                direction = TransactionTreatments.Direction.UNKNOWN,
+                shouldIgnore = true,
+                ignoreReason = "Issuer-side credit card payment confirmation."
+            )
+        }
+
+        val direction = inferDirection(lower)
         return when {
             lower.contains("zelle") ||
-                    lower.contains("venmo") ||
-                    lower.contains("cash app") -> TransactionTreatments.PERSON_TO_PERSON
+                lower.contains("venmo") ||
+                lower.contains("cash app") -> {
+                GenericClassification(
+                    treatment = if (direction == TransactionTreatments.Direction.INCOMING) {
+                        TransactionTreatments.INCOME
+                    } else {
+                        TransactionTreatments.PERSON_TO_PERSON
+                    },
+                    direction = direction,
+                    reviewStatus = ReviewStatus.NEEDS_REVIEW
+                )
+            }
 
             lower.contains("credit card payment") ||
-                    lower.contains("payment to your credit card") ||
-                    lower.contains("paid") && lower.contains("credit card") ||
-                    lower.contains("payment was made") ||
-                    (lower.contains("payment received") && lower.contains("card")) -> {
-                TransactionTreatments.CREDIT_CARD_PAYMENT
+                lower.contains("payment to your credit card") ||
+                lower.contains("paid") && lower.contains("credit card") ||
+                lower.contains("payment was made") ||
+                (lower.contains("payment received") && lower.contains("card")) -> {
+                GenericClassification(
+                    treatment = TransactionTreatments.CREDIT_CARD_PAYMENT,
+                    direction = direction
+                )
             }
 
             lower.contains("refund") ||
-                    lower.contains("credited back") -> {
-                TransactionTreatments.REFUND
+                lower.contains("credited back") -> {
+                GenericClassification(
+                    treatment = TransactionTreatments.REFUND,
+                    direction = TransactionTreatments.Direction.INCOMING,
+                    reviewStatus = ReviewStatus.NEEDS_REVIEW
+                )
             }
 
             lower.contains("direct deposit") ||
-                    lower.contains("deposit") ||
-                    lower.contains("credited to your account") ||
-                    lower.contains("was credited") -> {
-                TransactionTreatments.INCOME
+                lower.contains("payroll") && lower.contains("deposit") ||
+                lower.contains("deposit") ||
+                lower.contains("credited to your account") ||
+                lower.contains("was credited") -> {
+                GenericClassification(
+                    treatment = TransactionTreatments.INCOME,
+                    direction = TransactionTreatments.Direction.INCOMING
+                )
             }
 
             lower.contains("external transfer") ||
-                    lower.contains("transfer") ||
-                    lower.contains("ach") -> {
-                TransactionTreatments.TRANSFER
+                lower.contains("bill pay") ||
+                lower.contains("electronic payment") ||
+                lower.contains("payment to ") ||
+                lower.contains("ach payment") ||
+                lower.contains("ach transfer") ||
+                lower.contains("ach") -> {
+                val confidentInternal = looksLikeInternalTransfer(lower)
+                GenericClassification(
+                    treatment = if (confidentInternal) {
+                        TransactionTreatments.TRANSFER
+                    } else {
+                        TransactionTreatments.POSSIBLE_PAYMENT_TRANSFER
+                    },
+                    direction = direction,
+                    reviewStatus = if (confidentInternal) null else ReviewStatus.NEEDS_REVIEW
+                )
+            }
+
+            lower.contains("transfer") -> {
+                val confidentInternal = looksLikeInternalTransfer(lower)
+                GenericClassification(
+                    treatment = if (confidentInternal) {
+                        TransactionTreatments.TRANSFER
+                    } else {
+                        TransactionTreatments.POSSIBLE_PAYMENT_TRANSFER
+                    },
+                    direction = direction,
+                    reviewStatus = if (confidentInternal) null else ReviewStatus.NEEDS_REVIEW
+                )
             }
 
             lower.contains("spent") ||
-                    lower.contains("purchase") ||
-                    lower.contains("charged") ||
-                    lower.contains("chrge") ||
-                    lower.contains("charge") ||
-                    lower.contains("debit card purchase") ||
-                    lower.contains("debit card transaction") ||
-                    lower.contains("transaction") ||
-                    lower.contains("pos") -> {
-                TransactionTreatments.EXPENSE
+                lower.contains("purchase") ||
+                lower.contains("charged") ||
+                lower.contains("chrge") ||
+                lower.contains("charge") ||
+                lower.contains("debit card purchase") ||
+                lower.contains("debit card transaction") ||
+                lower.contains("transaction") ||
+                lower.contains("pos") ||
+                lower.contains("withdrawal") ||
+                lower.contains("withdrawn") ||
+                lower.contains("atm") -> {
+                GenericClassification(
+                    treatment = TransactionTreatments.EXPENSE,
+                    direction = if (direction == TransactionTreatments.Direction.UNKNOWN) {
+                        TransactionTreatments.Direction.OUTGOING
+                    } else {
+                        direction
+                    }
+                )
             }
 
-            lower.contains("withdrawal") ||
-                    lower.contains("withdrawn") ||
-                    lower.contains("atm") -> {
-                TransactionTreatments.EXPENSE
-            }
-
-            else -> TransactionTreatments.UNKNOWN
+            else -> GenericClassification(
+                treatment = TransactionTreatments.UNKNOWN,
+                direction = direction,
+                reviewStatus = ReviewStatus.NEEDS_REVIEW
+            )
         }
     }
 
@@ -215,12 +308,18 @@ object SmsTransactionParser {
         source: FinancialSourceEntity?
     ): ProfileOutcome? {
         val lower = text.lowercase(Locale.US)
-        val sender = source?.sourceAddress?.trim().orEmpty()
+        val sender = source?.sourceAddress?.trim()?.lowercase(Locale.US).orEmpty()
 
         return when {
-            sender == "227898" || lower.contains("capital one") -> parseCapitalOne(text)
-            sender == "24273" || lower.contains("chase | zelle") || lower.contains("chase acct") -> parseChase(text)
-            lower.contains("hdfc") || lower.contains("hdfc bank") -> parseHdfc(text)
+            sender == "227898" ||
+                source?.institutionName.equals("Capital One", ignoreCase = true) -> parseCapitalOne(text)
+            sender == "24273" ||
+                source?.institutionName.equals("Chase", ignoreCase = true) -> parseChase(text)
+            sender == "hdfcbk" ||
+                source?.institutionName.equals("HDFC Bank", ignoreCase = true) -> parseHdfc(text)
+            source == null && lower.contains("capital one") -> parseCapitalOne(text)
+            source == null && (lower.contains("chase | zelle") || lower.contains("chase acct")) -> parseChase(text)
+            source == null && (lower.contains("hdfc") || lower.contains("hdfc bank")) -> parseHdfc(text)
             else -> null
         }
     }
@@ -250,6 +349,7 @@ object SmsTransactionParser {
                 return ProfileOutcome.Parsed(
                     amountCents = amount,
                     accountingTreatment = TransactionTreatments.EXPENSE,
+                    direction = TransactionTreatments.Direction.OUTGOING,
                     merchant = merchant,
                     accountHint = extractAccountHint(text),
                     institution = "Capital One",
@@ -271,22 +371,12 @@ object SmsTransactionParser {
         Regex("""(?i)\byou paid\s+($MONEY_AMOUNT_PATTERN)\s+to your\s+(.+?credit card).*?(?:\bon\b|\.|$)""")
             .find(text)
             ?.let { match ->
-                val amount = extractAmountCents(match.groupValues[1]) ?: return null
-                val payee = match.groupValues[2].cleanMerchantCandidate()
-                    .ifBlank { "Capital One Credit Card" }
-                return ProfileOutcome.Parsed(
-                    amountCents = amount,
-                    accountingTreatment = TransactionTreatments.CREDIT_CARD_PAYMENT,
-                    merchant = payee,
-                    accountHint = extractAccountHint(text),
-                    institution = "Capital One",
-                    reviewStatus = "AUTO_PARSED",
-                    confidence = 0.94,
-                    diagnostic = ParserDiagnostic(
+                return ProfileOutcome.Ignored(
+                    ParserDiagnostic(
                         profile = "Capital One",
                         patternId = "capital_one_paid_card",
-                        treatmentReason = "Payment to a Capital One credit card.",
-                        merchantSpan = "Payee phrase after 'to your'."
+                        treatmentReason = "Issuer-side credit card payment confirmation.",
+                        ignoreReason = "Capital One payment confirmations are ignored to avoid duplicate ledger entries."
                     )
                 )
             }
@@ -294,20 +384,12 @@ object SmsTransactionParser {
         Regex("""(?i)\byour payment of\s+($MONEY_AMOUNT_PATTERN)\s+is scheduled\b""")
             .find(text)
             ?.let { match ->
-                val amount = extractAmountCents(match.groupValues[1]) ?: return null
-                return ProfileOutcome.Parsed(
-                    amountCents = amount,
-                    accountingTreatment = TransactionTreatments.CREDIT_CARD_PAYMENT,
-                    merchant = "Capital One Credit Card",
-                    accountHint = extractAccountHint(text),
-                    institution = "Capital One",
-                    reviewStatus = "AUTO_PARSED",
-                    confidence = 0.92,
-                    diagnostic = ParserDiagnostic(
+                return ProfileOutcome.Ignored(
+                    ParserDiagnostic(
                         profile = "Capital One",
                         patternId = "capital_one_scheduled_payment",
-                        treatmentReason = "Scheduled credit-card payment confirmation.",
-                        merchantSpan = "Fixed payee from Capital One scheduled payment alert."
+                        treatmentReason = "Issuer-side scheduled credit-card payment confirmation.",
+                        ignoreReason = "Capital One scheduled payment confirmations are ignored to avoid duplicate ledger entries."
                     )
                 )
             }
@@ -325,10 +407,11 @@ object SmsTransactionParser {
                 val amount = extractAmountCents(match.groupValues[2]) ?: return null
                 return ProfileOutcome.Parsed(
                     amountCents = amount,
-                    accountingTreatment = TransactionTreatments.PERSON_TO_PERSON,
+                    accountingTreatment = TransactionTreatments.INCOME,
+                    direction = TransactionTreatments.Direction.INCOMING,
                     merchant = payee,
                     institution = "Chase",
-                    reviewStatus = "NEEDS_REVIEW",
+                    reviewStatus = ReviewStatus.NEEDS_REVIEW,
                     confidence = 0.84,
                     diagnostic = ParserDiagnostic(
                         profile = "Chase",
@@ -347,9 +430,10 @@ object SmsTransactionParser {
                 return ProfileOutcome.Parsed(
                     amountCents = amount,
                     accountingTreatment = TransactionTreatments.PERSON_TO_PERSON,
+                    direction = TransactionTreatments.Direction.OUTGOING,
                     merchant = payee,
                     institution = "Chase",
-                    reviewStatus = "NEEDS_REVIEW",
+                    reviewStatus = ReviewStatus.NEEDS_REVIEW,
                     confidence = 0.82,
                     diagnostic = ParserDiagnostic(
                         profile = "Chase",
@@ -368,6 +452,7 @@ object SmsTransactionParser {
                 return ProfileOutcome.Parsed(
                     amountCents = amount,
                     accountingTreatment = TransactionTreatments.EXPENSE,
+                    direction = TransactionTreatments.Direction.OUTGOING,
                     merchant = merchant,
                     accountHint = extractAccountHint(text),
                     institution = "Chase",
@@ -393,11 +478,20 @@ object SmsTransactionParser {
                 val payee = match.groupValues[2].cleanMerchantCandidate()
                 return ProfileOutcome.Parsed(
                     amountCents = amount,
-                    accountingTreatment = TransactionTreatments.TRANSFER,
+                    accountingTreatment = if (looksLikeInternalTransfer(payee.lowercase(Locale.US))) {
+                        TransactionTreatments.TRANSFER
+                    } else {
+                        TransactionTreatments.POSSIBLE_PAYMENT_TRANSFER
+                    },
+                    direction = TransactionTreatments.Direction.OUTGOING,
                     merchant = payee,
                     accountHint = extractAccountHint(text),
                     institution = "Chase",
-                    reviewStatus = "AUTO_PARSED",
+                    reviewStatus = if (looksLikeInternalTransfer(payee.lowercase(Locale.US))) {
+                        ReviewStatus.AUTO_PARSED
+                    } else {
+                        ReviewStatus.NEEDS_REVIEW
+                    },
                     confidence = 0.91,
                     diagnostic = ParserDiagnostic(
                         profile = "Chase",
@@ -415,10 +509,11 @@ object SmsTransactionParser {
                 return ProfileOutcome.Parsed(
                     amountCents = amount,
                     accountingTreatment = TransactionTreatments.INCOME,
+                    direction = TransactionTreatments.Direction.INCOMING,
                     merchant = "Direct Deposit",
                     accountHint = extractAccountHint(text),
                     institution = "Chase",
-                    reviewStatus = "AUTO_PARSED",
+                    reviewStatus = ReviewStatus.AUTO_PARSED,
                     confidence = 0.91,
                     diagnostic = ParserDiagnostic(
                         profile = "Chase",
@@ -465,6 +560,7 @@ object SmsTransactionParser {
                     amountCents = amount,
                     currency = "INR",
                     accountingTreatment = TransactionTreatments.EXPENSE,
+                    direction = TransactionTreatments.Direction.OUTGOING,
                     merchant = merchant,
                     accountHint = extractAccountHint(text),
                     institution = "HDFC Bank",
@@ -491,10 +587,11 @@ object SmsTransactionParser {
                     amountCents = amount,
                     currency = "INR",
                     accountingTreatment = TransactionTreatments.INCOME,
+                    direction = TransactionTreatments.Direction.INCOMING,
                     merchant = "Money Received",
                     accountHint = extractAccountHint(text),
                     institution = "HDFC Bank",
-                    reviewStatus = "AUTO_PARSED",
+                    reviewStatus = ReviewStatus.AUTO_PARSED,
                     confidence = 0.89,
                     diagnostic = ParserDiagnostic(
                         profile = "HDFC",
@@ -514,11 +611,12 @@ object SmsTransactionParser {
                 return ProfileOutcome.Parsed(
                     amountCents = amount,
                     currency = "INR",
-                    accountingTreatment = TransactionTreatments.TRANSFER,
+                    accountingTreatment = TransactionTreatments.POSSIBLE_PAYMENT_TRANSFER,
+                    direction = TransactionTreatments.Direction.OUTGOING,
                     merchant = payee,
                     accountHint = extractAccountHint(text),
                     institution = "HDFC Bank",
-                    reviewStatus = "AUTO_PARSED",
+                    reviewStatus = ReviewStatus.NEEDS_REVIEW,
                     confidence = 0.86,
                     diagnostic = ParserDiagnostic(
                         profile = "HDFC",
@@ -538,10 +636,11 @@ object SmsTransactionParser {
                     amountCents = amount,
                     currency = "INR",
                     accountingTreatment = TransactionTreatments.EXPENSE,
+                    direction = TransactionTreatments.Direction.OUTGOING,
                     merchant = merchant.ifBlank { "ATM Withdrawal" },
                     accountHint = extractAccountHint(text),
                     institution = "HDFC Bank",
-                    reviewStatus = "AUTO_PARSED",
+                    reviewStatus = ReviewStatus.AUTO_PARSED,
                     confidence = 0.88,
                     diagnostic = ParserDiagnostic(
                         profile = "HDFC",
@@ -561,6 +660,7 @@ object SmsTransactionParser {
         amountCents: Long,
         currency: String,
         accountingTreatment: String,
+        direction: TransactionTreatments.Direction,
         merchant: String?,
         merchantExtraction: MerchantExtraction?,
         accountHint: String?,
@@ -572,18 +672,22 @@ object SmsTransactionParser {
     ): TransactionEntity {
         val lower = rawAlert.combinedText.lowercase(Locale.US)
         val isZelle = lower.contains("zelle")
-        val excludedFromSpending = TransactionTreatments.defaultExcludedFromSpending(accountingTreatment)
+        val excludedFromSpending = TransactionTreatments.defaultExcludedFromSpending(
+            treatment = accountingTreatment,
+            direction = direction
+        )
 
         val reviewStatus = reviewStatusOverride ?: when {
-            isZelle -> "NEEDS_REVIEW"
-            accountingTreatment == TransactionTreatments.PERSON_TO_PERSON -> "NEEDS_REVIEW"
-            accountingTreatment == TransactionTreatments.UNKNOWN -> "NEEDS_REVIEW"
-            merchant.isNullOrBlank() && accountingTreatment == TransactionTreatments.EXPENSE -> "NEEDS_REVIEW"
-            else -> "AUTO_PARSED"
+            isZelle -> ReviewStatus.NEEDS_REVIEW
+            accountingTreatment == TransactionTreatments.PERSON_TO_PERSON -> ReviewStatus.NEEDS_REVIEW
+            accountingTreatment == TransactionTreatments.POSSIBLE_PAYMENT_TRANSFER -> ReviewStatus.NEEDS_REVIEW
+            accountingTreatment == TransactionTreatments.UNKNOWN -> ReviewStatus.NEEDS_REVIEW
+            merchant.isNullOrBlank() && accountingTreatment == TransactionTreatments.EXPENSE -> ReviewStatus.NEEDS_REVIEW
+            else -> ReviewStatus.AUTO_PARSED
         }
 
         val confidence = confidenceOverride ?: when {
-            reviewStatus == "NEEDS_REVIEW" -> 0.55
+            reviewStatus == ReviewStatus.NEEDS_REVIEW -> 0.55
             merchant != null && categorySuggestion != null && accountHint != null -> 0.88 + (merchantExtraction?.confidenceBonus ?: 0.0)
             merchant != null && accountHint != null -> 0.84 + (merchantExtraction?.confidenceBonus ?: 0.0)
             merchant != null && categorySuggestion != null -> 0.80 + (merchantExtraction?.confidenceBonus ?: 0.0)
@@ -597,6 +701,7 @@ object SmsTransactionParser {
             add("Treatment reason: ${diagnostic.treatmentReason}")
             diagnostic.merchantSpan?.let { add("Merchant span: $it") }
             add("Accounting treatment: $accountingTreatment.")
+            add("Direction: ${direction.name.lowercase(Locale.US)}.")
             if (merchantExtraction != null) {
                 add("Merchant extracted by ${merchantExtraction.method}.")
             }
@@ -635,6 +740,106 @@ object SmsTransactionParser {
             createdAtEpochMs = now,
             updatedAtEpochMs = now
         )
+    }
+
+    private fun inferDirection(lower: String): TransactionTreatments.Direction {
+        return when {
+            containsAny(
+                lower,
+                "sent you",
+                "from payroll",
+                "deposit",
+                "received from",
+                "received ",
+                "credited",
+                "refund from",
+                "money received"
+            ) -> TransactionTreatments.Direction.INCOMING
+            containsAny(
+                lower,
+                "you sent",
+                "sent ",
+                "payment to",
+                "paid ",
+                "transfer to",
+                "withdraw",
+                "spent",
+                "purchase",
+                "charge",
+                "debit",
+                "bill pay"
+            ) -> TransactionTreatments.Direction.OUTGOING
+            else -> TransactionTreatments.Direction.UNKNOWN
+        }
+    }
+
+    private fun looksLikeInternalTransfer(lower: String): Boolean {
+        return containsAny(
+            lower,
+            "your savings",
+            "your checking",
+            "to savings",
+            "to checking",
+            "between accounts",
+            "own account",
+            "linked account",
+            "brokerage",
+            "money market"
+        )
+    }
+
+    private fun looksClearlyInformational(lower: String): Boolean {
+        return containsAny(
+            lower,
+            "available balance",
+            "your available balance",
+            "available credit",
+            "statement balance",
+            "minimum payment due",
+            "payment due",
+            "otp",
+            "fraud",
+            "declined",
+            "unauthorized",
+            "unauthorised"
+        )
+    }
+
+    private fun isIssuerPaymentConfirmation(
+        text: String,
+        source: FinancialSourceEntity?
+    ): Boolean {
+        val lower = text.lowercase(Locale.US)
+        val sourceLooksLikeCardIssuer =
+            source?.confirmedAccountType.equals("CREDIT_CARD", ignoreCase = true) ||
+                source?.suggestedAccountType.equals("CREDIT_CARD", ignoreCase = true) ||
+                containsAny(lower, "credit card", "card account", "venture card", "visa card")
+
+        if (!sourceLooksLikeCardIssuer) return false
+
+        val confirmation = containsAny(
+            lower,
+            "payment was received",
+            "payment received",
+            "payment posted",
+            "payment successful",
+            "thank you for your payment",
+            "your payment of",
+            "you paid ",
+            "payment is scheduled"
+        ) || Regex("""(?i)credit card payment of\s+$MONEY_AMOUNT_PATTERN\s+was made""").containsMatchIn(text)
+
+        val bankDebitStyleAlert = containsAny(
+            lower,
+            "debit card transaction",
+            "checking acct",
+            "checking account",
+            "external transfer to",
+            "bill pay to",
+            "payment to "
+        )
+
+        return confirmation && !bankDebitStyleAlert
     }
 
     private fun extractAccountHint(text: String): String? {
@@ -686,6 +891,7 @@ object SmsTransactionParser {
                 TransactionTreatments.REFUND,
                 TransactionTreatments.REIMBURSEMENT,
                 TransactionTreatments.TRANSFER,
+                TransactionTreatments.POSSIBLE_PAYMENT_TRANSFER,
                 TransactionTreatments.PERSON_TO_PERSON,
                 TransactionTreatments.CREDIT_CARD_PAYMENT,
                 TransactionTreatments.INCOME
@@ -702,6 +908,7 @@ object SmsTransactionParser {
             "person transfer" to Regex("""(?i)\b(?:sent|paid|transferred)\s+(?:$MONEY_AMOUNT_PATTERN\s+)?to\s+(.+?)(?:\s+(?:with|via)\s+(?:zelle|venmo|cash app)|\s+on\s+|[.,]|$)"""),
             "incoming from" to Regex("""(?i)\b(?:received|deposit|credited)\s+(?:$MONEY_AMOUNT_PATTERN\s+)?(?:from|by)\s+(.+?)(?:\s+(?:with|via)\s+(?:zelle|venmo|cash app)|\s+on\s+|[.,]|$)"""),
             "paid to" to Regex("""(?i)\bpaid\s+(?:$MONEY_AMOUNT_PATTERN\s+)?(?:to\s+)?(.+?)(?:\s+on\s+(?:card|account)|\s+(?:ending|using|for)\b|[.,]|$)"""),
+            "payment to amount" to Regex("""(?i)\bpayment to\s+(.+?)\s+$MONEY_AMOUNT_PATTERN(?:\s+|[.,]|$)"""),
             "generic at" to Regex("""(?i)\bat\s+(.+?)(?:\s+on\s+(?:card|account)|\s+(?:ending|using|for)\b|[.,]|$)""")
         )
 
@@ -750,13 +957,13 @@ object SmsTransactionParser {
                 "Groceries"
 
             containsAny(haystack, "shell", "exxon", "chevron", "bp ", "mobil", "speedway", "circle k", "gas", "fuel") ->
-                "Gas"
+                "Gas & Transport"
 
             containsAny(haystack, "netflix", "spotify", "hulu", "disney", "youtube", "apple.com/bill", "google", "subscription") ->
                 "Subscriptions"
 
             containsAny(haystack, "mcdonald", "starbucks", "chipotle", "restaurant", "cafe", "doordash", "uber eats", "grubhub") ->
-                "Restaurants"
+                "Dining & Restaurants"
 
             containsAny(haystack, "walgreens", "cvs", "pharmacy", "clinic", "doctor", "hospital") ->
                 "Healthcare"

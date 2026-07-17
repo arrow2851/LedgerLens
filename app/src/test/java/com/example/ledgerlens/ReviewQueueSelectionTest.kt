@@ -37,20 +37,39 @@ class ReviewQueueSelectionTest {
         )
     }
 
+    @Test
+    fun possiblePaymentDefaultsIntoPossibleTransfersBucket() {
+        assertEquals(
+            ReviewQueueFilter.POSSIBLE_TRANSFERS,
+            defaultReviewQueueFilter(
+                listOf(
+                    transaction(
+                        categoryName = "Utilities",
+                        reviewStatus = "AUTO_PARSED",
+                        merchantName = null,
+                        treatment = TransactionTreatments.POSSIBLE_PAYMENT_TRANSFER
+                    )
+                )
+            )
+        )
+    }
+
     private fun transaction(
         categoryName: String?,
-        reviewStatus: String = "AUTO_PARSED"
+        reviewStatus: String = "AUTO_PARSED",
+        merchantName: String? = "Cafe",
+        treatment: String = TransactionTreatments.EXPENSE
     ): TransactionEntity {
         return TransactionEntity(
             id = 1,
             rawAlertId = 1,
             sourceKey = "sender:bank",
-            transactionType = TransactionTreatments.EXPENSE,
-            accountingTreatment = TransactionTreatments.EXPENSE,
+            transactionType = treatment,
+            accountingTreatment = treatment,
             amountCents = 1000,
             currency = "USD",
-            merchantRaw = "Cafe",
-            displayMerchantName = "Cafe",
+            merchantRaw = merchantName,
+            displayMerchantName = merchantName,
             sourceInstitution = "Bank",
             accountHint = null,
             occurredAtEpochMs = 1,

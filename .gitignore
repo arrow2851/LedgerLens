@@ -9,4 +9,7 @@ captures/
 .externalNativeBuild/
 .cxx/
 
+# The public Base64 source is test-only; never commit the decoded key file.
+app/preview-signing/ledgerlens-preview.keystore
+
 # Room schemas are intentionally versioned once the clean v1 schema is established.

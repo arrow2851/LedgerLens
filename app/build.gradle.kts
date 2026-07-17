@@ -1,3 +1,5 @@
+import java.util.Base64
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -5,9 +7,32 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+val previewSigningDirectory = file("preview-signing")
+val previewSigningBase64 = file("preview-signing/ledgerlens-preview.keystore.b64")
+val previewSigningFile = file("preview-signing/ledgerlens-preview.keystore")
+
+if (!previewSigningFile.exists()) {
+    require(previewSigningBase64.exists()) {
+        "Missing test-only preview signing material: ${previewSigningBase64.path}"
+    }
+    previewSigningDirectory.mkdirs()
+    previewSigningFile.writeBytes(
+        Base64.getDecoder().decode(previewSigningBase64.readText().trim())
+    )
+}
+
 android {
     namespace = "com.example.ledgerlens"
     compileSdk = 36
+
+    signingConfigs {
+        create("preview") {
+            storeFile = previewSigningFile
+            storePassword = "ledgerlens-preview-2026"
+            keyAlias = "ledgerlens-preview"
+            keyPassword = "ledgerlens-preview-2026"
+        }
+    }
 
     defaultConfig {
         applicationId = "com.example.ledgerlens"
@@ -20,6 +45,12 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            applicationIdSuffix = ".preview"
+            versionNameSuffix = "-preview"
+            signingConfig = signingConfigs.getByName("preview")
+        }
+
         release {
             isMinifyEnabled = false
             proguardFiles(

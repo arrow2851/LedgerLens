@@ -10,6 +10,10 @@ plugins {
 val previewSigningDirectory = file("preview-signing")
 val previewSigningBase64 = file("preview-signing/ledgerlens-preview.keystore.b64")
 val previewSigningFile = file("preview-signing/ledgerlens-preview.keystore")
+val previewBuildNumber = providers.environmentVariable("GITHUB_RUN_NUMBER")
+    .orNull
+    ?.toIntOrNull()
+    ?: 1
 
 if (!previewSigningFile.exists()) {
     require(previewSigningBase64.exists()) {
@@ -38,8 +42,8 @@ android {
         applicationId = "com.example.ledgerlens"
         minSdk = 23
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = previewBuildNumber
+        versionName = "0.1.$previewBuildNumber"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

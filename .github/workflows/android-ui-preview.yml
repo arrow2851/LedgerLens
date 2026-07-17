@@ -3,6 +3,8 @@ name: Android UI Preview
 on:
   push:
     branches: ["refactor/product-reset-ui"]
+  pull_request:
+    branches: ["refactor/product-reset"]
   workflow_dispatch:
 
 permissions:

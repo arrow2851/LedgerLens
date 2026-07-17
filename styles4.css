@@ -1,0 +1,2 @@
+@media(min-width:600px){.app{max-width:430px;margin:24px auto;border-radius:32px;overflow:hidden;box-shadow:0 25px 70px rgba(25,59,55,.18);min-height:calc(100dvh - 48px)}.nav{max-width:430px;margin:auto;border-radius:0 0 32px 32px}.sheet{max-width:430px;margin:auto}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}

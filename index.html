@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#edf4ef" />
+  <title>LedgerLens Mobile Preview</title>
+  <style>
+    html,body{height:100%;margin:0;background:#edf4ef;color:#17313a;font:16px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    body{display:grid;place-items:center;padding:24px;box-sizing:border-box}
+    main{max-width:360px;text-align:center}
+    .mark{width:52px;height:52px;margin:0 auto 18px;border-radius:18px;display:grid;place-items:center;color:white;font-weight:800;background:linear-gradient(135deg,#173f49,#2f8276);box-shadow:0 16px 40px rgba(23,63,73,.18)}
+    h1{font-size:22px;margin:0 0 8px}p{font-size:14px;line-height:1.5;color:#60747a;margin:0}
+    .error{display:none;margin-top:18px;padding:14px;border:1px solid #d8e2dc;border-radius:16px;background:white;color:#8d3a3a}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="mark">LL</div>
+    <h1>Opening LedgerLens</h1>
+    <p>Loading the mobile-first Overview and Activity prototype…</p>
+    <div class="error" id="error">The preview could not be loaded. Refresh the page or open it in a current version of Chrome, Edge, Firefox, or Safari.</div>
+  </main>
+  <script>
+    (async()=>{
+      try{
+        if(!('DecompressionStream' in window)) throw new Error('DecompressionStream unavailable');
+        const response=await fetch('./mobile-preview/site.html.gz',{cache:'no-store'});
+        if(!response.ok) throw new Error('Preview asset not found');
+        const stream=response.body.pipeThrough(new DecompressionStream('gzip'));
+        const html=await new Response(stream).text();
+        document.open();
+        document.write(html);
+        document.close();
+      }catch(error){
+        console.error(error);
+        document.getElementById('error').style.display='block';
+      }
+    })();
+  </script>
+</body>
+</html>

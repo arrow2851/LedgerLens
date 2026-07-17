@@ -1,0 +1,74 @@
+name: Android CI
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [refactor/product-reset]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Verify Gradle wrapper
+        run: ./gradlew --version
+
+      - name: Run unit tests
+        id: unit_tests
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          ./gradlew testDebugUnitTest --console=plain 2>&1 | tee unit-test.log
+
+      - name: Run lint
+        id: lint
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          ./gradlew lintDebug --console=plain 2>&1 | tee lint.log
+
+      - name: Upload verification diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-verification-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            unit-test.log
+            lint.log
+            app/build/test-results/testDebugUnitTest/**
+            app/build/reports/tests/testDebugUnitTest/**
+            app/build/reports/lint-results-debug.*
+
+      - name: Enforce verification result
+        if: always()
+        run: |
+          echo "Unit test outcome: ${{ steps.unit_tests.outcome }}"
+          echo "Lint outcome: ${{ steps.lint.outcome }}"
+          test "${{ steps.unit_tests.outcome }}" = "success"
+          test "${{ steps.lint.outcome }}" = "success"

@@ -1,0 +1,209 @@
+name: Android UI Preview
+
+on:
+  push:
+    branches: ["refactor/product-reset-ui"]
+  pull_request:
+    branches: ["refactor/product-reset"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-ui-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and verify preview APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out UI branch
+        uses: actions/checkout@v6
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Verify wrapper
+        uses: gradle/actions/wrapper-validation@v5
+
+      - name: Make wrapper executable
+        run: chmod +x gradlew
+
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Run Android lint
+        run: ./gradlew lintDebug --stacktrace
+
+      - name: Build stable-signed preview APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Verify preview signing identity
+        run: ./gradlew signingReport
+
+      - name: Upload preview APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ledgerlens-preview-apk-${{ github.sha }}
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ledgerlens-ui-verification-${{ github.sha }}
+          path: |
+            app/build/reports/tests/
+            app/build/reports/lint-results-debug.html
+            app/build/reports/lint-results-debug.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+  baseline-apk:
+    name: Build frozen prototype baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out pre-rebuild baseline
+        uses: actions/checkout@v6
+        with:
+          ref: 7d9c2fb2ba1d9800202597647f5b6d554fa8f003
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Make wrapper executable
+        run: chmod +x gradlew
+
+      - name: Build baseline APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload baseline APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ledgerlens-baseline-apk-${{ github.sha }}
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  screenshots:
+    name: Capture baseline and rebuilt screens
+    needs: [build, baseline-apk]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out UI branch
+        uses: actions/checkout@v6
+
+      - name: Download rebuilt APK
+        uses: actions/download-artifact@v5
+        with:
+          name: ledgerlens-preview-apk-${{ github.sha }}
+          path: preview-apk
+
+      - name: Download baseline APK
+        uses: actions/download-artifact@v5
+        with:
+          name: ledgerlens-baseline-apk-${{ github.sha }}
+          path: baseline-apk
+
+      - name: Capture baseline, Overview, Activity, Review, and Insights
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: |
+            set +e
+            set -u
+            mkdir -p screenshots diagnostics
+            exec > >(tee diagnostics/capture.log) 2>&1
+
+            adb install -r baseline-apk/app-debug.apk
+            adb shell am force-stop com.example.ledgerlens || true
+            adb shell monkey -p com.example.ledgerlens -c android.intent.category.LAUNCHER 1 || true
+            sleep 4
+            adb exec-out screencap -p > screenshots/00-prototype-baseline.png || true
+            adb uninstall com.example.ledgerlens || true
+
+            adb install -r preview-apk/app-debug.apk
+            adb shell am start -W -n com.example.ledgerlens.preview/com.example.ledgerlens.PreviewSeedActivity || true
+            sleep 6
+
+            SIZE=$(adb shell wm size | sed -n 's/.*Physical size: //p' | tr -d '\r ' | head -n 1)
+            if [ -z "$SIZE" ]; then
+              SIZE=$(adb shell wm size | sed -n 's/.*Override size: //p' | tr -d '\r ' | head -n 1)
+            fi
+            if [ -z "$SIZE" ]; then
+              SIZE="1080x2400"
+            fi
+            WIDTH=${SIZE%x*}
+            HEIGHT=${SIZE#*x}
+            TAP_Y=$((HEIGHT - 120))
+
+            adb exec-out screencap -p > screenshots/01-overview.png || true
+            adb shell input tap $((WIDTH * 3 / 8)) "$TAP_Y" || true
+            sleep 2
+            adb exec-out screencap -p > screenshots/02-activity.png || true
+            adb shell input tap $((WIDTH * 5 / 8)) "$TAP_Y" || true
+            sleep 2
+            adb exec-out screencap -p > screenshots/03-review.png || true
+            adb shell input tap $((WIDTH * 7 / 8)) "$TAP_Y" || true
+            sleep 2
+            adb exec-out screencap -p > screenshots/04-insights.png || true
+
+            adb shell dumpsys activity activities > diagnostics/activities.txt || true
+            adb logcat -d > diagnostics/logcat.txt || true
+
+            missing=0
+            for file in \
+              screenshots/00-prototype-baseline.png \
+              screenshots/01-overview.png \
+              screenshots/02-activity.png \
+              screenshots/03-review.png \
+              screenshots/04-insights.png
+            do
+              if [ ! -s "$file" ]; then
+                echo "Missing screenshot: $file"
+                missing=1
+              fi
+            done
+            exit "$missing"
+
+      - name: Upload screenshot set
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ledgerlens-ui-screenshots-${{ github.sha }}
+          path: screenshots/*.png
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload emulator diagnostics when needed
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ledgerlens-ui-diagnostics-${{ github.sha }}
+          path: diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7

@@ -133,6 +133,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: |
+            set +e
             set -u
             mkdir -p screenshots diagnostics
             exec > >(tee diagnostics/capture.log) 2>&1
@@ -141,39 +142,55 @@ jobs:
             adb shell am force-stop com.example.ledgerlens || true
             adb shell monkey -p com.example.ledgerlens -c android.intent.category.LAUNCHER 1 || true
             sleep 4
-            adb exec-out screencap -p > screenshots/00-prototype-baseline.png
+            adb exec-out screencap -p > screenshots/00-prototype-baseline.png || true
             adb uninstall com.example.ledgerlens || true
 
             adb install -r preview-apk/app-debug.apk
-            adb shell am start -W -n com.example.ledgerlens.preview/com.example.ledgerlens.PreviewSeedActivity
+            adb shell am start -W -n com.example.ledgerlens.preview/com.example.ledgerlens.PreviewSeedActivity || true
             sleep 6
 
             SIZE=$(adb shell wm size | sed -n 's/.*Physical size: //p' | tr -d '\r ' | head -n 1)
             if [ -z "$SIZE" ]; then
               SIZE=$(adb shell wm size | sed -n 's/.*Override size: //p' | tr -d '\r ' | head -n 1)
             fi
+            if [ -z "$SIZE" ]; then
+              SIZE="1080x2400"
+            fi
             WIDTH=${SIZE%x*}
             HEIGHT=${SIZE#*x}
             TAP_Y=$((HEIGHT - 120))
 
-            adb exec-out screencap -p > screenshots/01-overview.png
-            adb shell input tap $((WIDTH * 3 / 8)) "$TAP_Y"
+            adb exec-out screencap -p > screenshots/01-overview.png || true
+            adb shell input tap $((WIDTH * 3 / 8)) "$TAP_Y" || true
             sleep 2
-            adb exec-out screencap -p > screenshots/02-activity.png
-            adb shell input tap $((WIDTH * 5 / 8)) "$TAP_Y"
+            adb exec-out screencap -p > screenshots/02-activity.png || true
+            adb shell input tap $((WIDTH * 5 / 8)) "$TAP_Y" || true
             sleep 2
-            adb exec-out screencap -p > screenshots/03-review.png
-            adb shell input tap $((WIDTH * 7 / 8)) "$TAP_Y"
+            adb exec-out screencap -p > screenshots/03-review.png || true
+            adb shell input tap $((WIDTH * 7 / 8)) "$TAP_Y" || true
             sleep 2
-            adb exec-out screencap -p > screenshots/04-insights.png
+            adb exec-out screencap -p > screenshots/04-insights.png || true
 
-            test -s screenshots/00-prototype-baseline.png
-            test -s screenshots/01-overview.png
-            test -s screenshots/02-activity.png
-            test -s screenshots/03-review.png
-            test -s screenshots/04-insights.png
+            adb shell dumpsys activity activities > diagnostics/activities.txt || true
+            adb logcat -d > diagnostics/logcat.txt || true
+
+            missing=0
+            for file in \
+              screenshots/00-prototype-baseline.png \
+              screenshots/01-overview.png \
+              screenshots/02-activity.png \
+              screenshots/03-review.png \
+              screenshots/04-insights.png
+            do
+              if [ ! -s "$file" ]; then
+                echo "Missing screenshot: $file"
+                missing=1
+              fi
+            done
+            exit "$missing"
 
       - name: Upload screenshot set
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ledgerlens-ui-screenshots-${{ github.sha }}

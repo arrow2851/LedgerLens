@@ -125,8 +125,6 @@ jobs:
           path: baseline-apk
 
       - name: Capture baseline, Overview, Activity, Review, and Insights
-        id: capture
-        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -139,47 +137,35 @@ jobs:
             mkdir -p screenshots diagnostics
             exec > >(tee diagnostics/capture.log) 2>&1
 
-            echo "=== Device ==="
-            adb shell wm size || true
-            adb shell getprop ro.build.version.release || true
-
-            echo "=== Baseline ==="
             adb install -r baseline-apk/app-debug.apk
             adb shell am force-stop com.example.ledgerlens || true
             adb shell monkey -p com.example.ledgerlens -c android.intent.category.LAUNCHER 1 || true
             sleep 4
-            adb exec-out screencap -p > screenshots/00-prototype-baseline.png || true
+            adb exec-out screencap -p > screenshots/00-prototype-baseline.png
             adb uninstall com.example.ledgerlens || true
 
-            echo "=== Rebuilt preview ==="
             adb install -r preview-apk/app-debug.apk
-            adb shell am start -W -n com.example.ledgerlens.preview/com.example.ledgerlens.PreviewSeedActivity || true
+            adb shell am start -W -n com.example.ledgerlens.preview/com.example.ledgerlens.PreviewSeedActivity
             sleep 6
-            adb shell dumpsys activity activities > diagnostics/activities.txt || true
-            adb logcat -d > diagnostics/logcat.txt || true
 
             SIZE=$(adb shell wm size | sed -n 's/.*Physical size: //p' | tr -d '\r ' | head -n 1)
             if [ -z "$SIZE" ]; then
               SIZE=$(adb shell wm size | sed -n 's/.*Override size: //p' | tr -d '\r ' | head -n 1)
             fi
-            echo "Resolved size: $SIZE"
             WIDTH=${SIZE%x*}
             HEIGHT=${SIZE#*x}
             TAP_Y=$((HEIGHT - 120))
 
-            adb exec-out screencap -p > screenshots/01-overview.png || true
-            adb shell input tap $((WIDTH * 3 / 8)) "$TAP_Y" || true
+            adb exec-out screencap -p > screenshots/01-overview.png
+            adb shell input tap $((WIDTH * 3 / 8)) "$TAP_Y"
             sleep 2
-            adb exec-out screencap -p > screenshots/02-activity.png || true
-            adb shell input tap $((WIDTH * 5 / 8)) "$TAP_Y" || true
+            adb exec-out screencap -p > screenshots/02-activity.png
+            adb shell input tap $((WIDTH * 5 / 8)) "$TAP_Y"
             sleep 2
-            adb exec-out screencap -p > screenshots/03-review.png || true
-            adb shell input tap $((WIDTH * 7 / 8)) "$TAP_Y" || true
+            adb exec-out screencap -p > screenshots/03-review.png
+            adb shell input tap $((WIDTH * 7 / 8)) "$TAP_Y"
             sleep 2
-            adb exec-out screencap -p > screenshots/04-insights.png || true
-
-            adb shell uiautomator dump /sdcard/window.xml || true
-            adb pull /sdcard/window.xml diagnostics/window.xml || true
+            adb exec-out screencap -p > screenshots/04-insights.png
 
             test -s screenshots/00-prototype-baseline.png
             test -s screenshots/01-overview.png
@@ -187,17 +173,20 @@ jobs:
             test -s screenshots/03-review.png
             test -s screenshots/04-insights.png
 
-      - name: Upload screenshot and emulator diagnostics
-        if: always()
+      - name: Upload screenshot set
         uses: actions/upload-artifact@v4
         with:
           name: ledgerlens-ui-screenshots-${{ github.sha }}
-          path: |
-            screenshots/
-            diagnostics/
+          path: screenshots/*.png
           if-no-files-found: error
           retention-days: 30
 
-      - name: Enforce capture result
-        if: always()
-        run: test "${{ steps.capture.outcome }}" = "success"
+      - name: Upload emulator diagnostics when needed
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ledgerlens-ui-diagnostics-${{ github.sha }}
+          path: diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7

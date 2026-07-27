@@ -28,6 +28,15 @@ class TransactionAutomationTest {
     }
 
     @Test
+    fun locationWords_areNotStrippedWithoutAnExplicitAlias() {
+        assertEquals("PLANO DENTAL", canonicalMerchantIdentity("Plano Dental"))
+        assertEquals("DENTAL", canonicalMerchantIdentity("Dental"))
+        assertFalse(
+            canonicalMerchantIdentity("Plano Dental") == canonicalMerchantIdentity("Dental")
+        )
+    }
+
+    @Test
     fun editingAReviewItem_resolvesReviewWithoutExtraStep() {
         val status = resolvedReviewStatusAfterUserDecision(
             previousStatus = ReviewStatus.NEEDS_REVIEW,

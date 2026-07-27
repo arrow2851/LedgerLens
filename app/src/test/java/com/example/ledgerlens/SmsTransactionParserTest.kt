@@ -289,7 +289,7 @@ class SmsTransactionParserTest {
     }
 
     @Test
-    fun directRefundDefaultsOutsideSpending() {
+    fun directRefundDefaultsToNegativeSpendingOffset() {
         val transaction = SmsTransactionParser.parse(
             rawAlert = rawAlert("Refund from Target $23.19."),
             source = source()
@@ -298,7 +298,15 @@ class SmsTransactionParserTest {
         assertNotNull(transaction)
         transaction!!
         assertEquals(TransactionTreatments.REFUND, transaction.accountingTreatment)
-        assertTrue(transaction.excludedFromSpending)
+        assertEquals(false, transaction.excludedFromSpending)
+        assertEquals(
+            -2319L,
+            TransactionTreatments.spendingImpactCents(
+                treatment = transaction.accountingTreatment,
+                excludedFromSpending = transaction.excludedFromSpending,
+                amountCents = transaction.amountCents
+            )
+        )
         assertEquals("NEEDS_REVIEW", transaction.reviewStatus)
     }
 
@@ -353,7 +361,7 @@ class SmsTransactionParserTest {
     }
 
     private fun jsonString(line: String, name: String): String {
-        val match = Regex(""""$name":"([^"]*)"""")
+        val match = Regex("\"\"\"\"$name\":\"([^\"]*)\"\"\"")
             .find(line)
             ?: error("Missing JSON field $name in $line")
 

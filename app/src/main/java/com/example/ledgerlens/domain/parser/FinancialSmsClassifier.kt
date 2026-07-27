@@ -65,6 +65,15 @@ object FinancialSmsClassifier {
         "you sent"
     )
 
+    private val alwaysNonTransactionSignals = listOf(
+        "is above the limit in your alert settings",
+        "is below the limit in your alert settings",
+        "was above the limit in your alert settings",
+        "was below the limit in your alert settings",
+        "change your alert settings",
+        "alert threshold"
+    )
+
     private val nonTransactionSignals = listOf(
         "otp",
         "one time password",
@@ -103,6 +112,10 @@ object FinancialSmsClassifier {
 
     fun isLikelyNonTransactionFinancialAlert(text: String): Boolean {
         val lower = text.lowercase(Locale.US)
+
+        if (alwaysNonTransactionSignals.any { lower.contains(it) }) {
+            return true
+        }
 
         if (nonTransactionSignals.take(9).any { lower.contains(it) }) {
             return true

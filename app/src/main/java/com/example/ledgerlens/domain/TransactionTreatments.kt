@@ -63,15 +63,18 @@ object TransactionTreatments {
         direction: Direction = Direction.OUTGOING
     ): Boolean {
         return when (treatment) {
-            EXPENSE -> false
+            EXPENSE,
+            REFUND,
+            REIMBURSEMENT -> false
+
             PERSON_TO_PERSON,
             POSSIBLE_PAYMENT_TRANSFER,
             UNKNOWN -> direction != Direction.OUTGOING
-            REFUND,
-            REIMBURSEMENT,
+
             INCOME,
             CREDIT_CARD_PAYMENT,
             TRANSFER -> true
+
             else -> true
         }
     }

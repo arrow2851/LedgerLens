@@ -1,0 +1,67 @@
+[
+  {
+    "name": "external payment learns complete decision",
+    "input": {
+      "source": "Example Bank",
+      "parserPattern": "external_transfer",
+      "merchant": "Example Telecom",
+      "amount": 62.54,
+      "treatment": "POSSIBLE_PAYMENT_TRANSFER",
+      "category": "Utilities",
+      "reviewStatus": "NEEDS_REVIEW"
+    },
+    "expectedAfterRule": {
+      "treatment": "EXPENSE",
+      "category": "Utilities",
+      "excludedFromSpending": false,
+      "reviewStatus": "REVIEWED"
+    }
+  },
+  {
+    "name": "incoming reimbursement is amount scoped",
+    "input": {
+      "source": "Example Bank",
+      "parserPattern": "p2p_incoming",
+      "merchant": "Example Person",
+      "amount": 60.00
+    },
+    "expectedAfterRule": {
+      "treatment": "REIMBURSEMENT",
+      "category": "Utilities",
+      "excludedFromSpending": false,
+      "spendingImpact": -60.00
+    }
+  },
+  {
+    "name": "authorized user is not merchant",
+    "input": {
+      "merchantCandidate": "Example User's Venture Credit Card (1234)"
+    },
+    "expected": {
+      "authorizedUser": "Example User",
+      "accountHint": "1234",
+      "merchantCandidateAccepted": false
+    }
+  },
+  {
+    "name": "alert threshold is not a transaction",
+    "input": {
+      "message": "$3,200 at 10:03 PM ET is above the limit in your alert settings"
+    },
+    "expected": {
+      "ignored": true
+    }
+  },
+  {
+    "name": "merchant processor prefix normalizes",
+    "input": {
+      "merchants": [
+        "TST*Example Cafe",
+        "EXAMPLE CAFE"
+      ]
+    },
+    "expected": {
+      "sameCanonicalMerchant": true
+    }
+  }
+]

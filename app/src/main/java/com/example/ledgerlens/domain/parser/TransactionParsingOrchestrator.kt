@@ -6,6 +6,8 @@ import com.example.ledgerlens.data.entity.RawAlertEntity
 import com.example.ledgerlens.data.entity.TransactionEntity
 import com.example.ledgerlens.data.entity.TransactionRuleEntity
 import com.example.ledgerlens.domain.ReviewStatus
+import com.example.ledgerlens.domain.TransactionTreatments
+import com.example.ledgerlens.domain.automation.parseAuthorizedCardholderLabel
 import com.example.ledgerlens.domain.rules.MERCHANT_DEFAULT_RULE_SOURCE_KEY
 import com.example.ledgerlens.domain.rules.applyRulesToTransaction
 import com.example.ledgerlens.domain.source.SourceDetector
@@ -124,14 +126,15 @@ suspend fun parseIdentifiedSourceTransactions(
                     sourceRules = sourceRules,
                     merchantDefaultRules = merchantDefaultRules
                 )
+                val safeTransaction = sanitizeAuthorizedCardholderMerchant(ruleAdjustedTransaction)
 
                 if (existingTransaction == null) {
-                    database.transactionDao().insert(ruleAdjustedTransaction)
+                    database.transactionDao().insert(safeTransaction)
                     parsedCount++
                 } else {
                     val mergedTransaction = mergeReparsedTransaction(
                         existing = existingTransaction,
-                        reparsed = ruleAdjustedTransaction
+                        reparsed = safeTransaction
                     )
                     if (mergedTransaction != existingTransaction) {
                         database.transactionDao().update(mergedTransaction)
@@ -165,6 +168,37 @@ suspend fun parseIdentifiedSourceTransactions(
         skippedFailedCount = skippedFailedCount,
         changedCount = changedCount,
         unchangedCount = unchangedCount
+    )
+}
+
+internal fun sanitizeAuthorizedCardholderMerchant(
+    transaction: TransactionEntity,
+    now: Long = System.currentTimeMillis()
+): TransactionEntity {
+    if (transaction.accountingTreatment != TransactionTreatments.EXPENSE) {
+        return transaction
+    }
+
+    val candidate = transaction.displayMerchantName ?: transaction.merchantRaw
+    val cardholder = parseAuthorizedCardholderLabel(candidate) ?: return transaction
+    val repairNote = buildString {
+        append("Authorized user: ")
+        append(cardholder.authorizedUserName)
+        append(". Payment instrument: card ending ")
+        append(cardholder.accountHint)
+        append(". Merchant candidate was a cardholder/card-product label and was cleared.")
+    }
+    val notes = listOfNotNull(transaction.parserNotes, repairNote)
+        .joinToString(" ")
+
+    return transaction.copy(
+        merchantRaw = null,
+        displayMerchantName = null,
+        accountHint = transaction.accountHint ?: cardholder.accountHint,
+        parseConfidence = minOf(transaction.parseConfidence, 0.55),
+        reviewStatus = ReviewStatus.NEEDS_REVIEW,
+        parserNotes = notes,
+        updatedAtEpochMs = now
     )
 }
 
@@ -285,12 +319,13 @@ suspend fun reapplySavedRulesToExistingTransactions(database: AppDatabase): Rule
             database.transactionRuleDao().getActiveRulesForSource(transaction.sourceKey)
         }
 
-        val updatedTransaction = applyRulesToTransaction(
+        val ruleAdjustedTransaction = applyRulesToTransaction(
             transaction = transaction,
             rawAlert = rawAlert,
             sourceRules = sourceRules,
             merchantDefaultRules = merchantDefaultRules
         )
+        val updatedTransaction = sanitizeAuthorizedCardholderMerchant(ruleAdjustedTransaction)
 
         if (hasMeaningfulRuleChange(transaction, updatedTransaction)) {
             database.transactionDao().update(updatedTransaction)

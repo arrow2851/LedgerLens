@@ -5,6 +5,9 @@ import com.example.ledgerlens.data.entity.TransactionEntity
 import com.example.ledgerlens.data.entity.TransactionRuleEntity
 import com.example.ledgerlens.domain.ReviewStatus
 import com.example.ledgerlens.domain.TransactionTreatments
+import com.example.ledgerlens.domain.automation.canonicalMerchantIdentity
+import com.example.ledgerlens.domain.automation.isPaymentInstrumentLabel
+import com.example.ledgerlens.domain.automation.transactionDirectionFromParserNotes
 
 data class MerchantAliasRuleDraft(
     val sourceKey: String,
@@ -53,8 +56,11 @@ fun aliasMatchesText(alias: String, text: String?): Boolean {
 
     val normalizedAlias = normalizeAliasText(cleanedAlias)
     if (normalizedAlias.isBlank()) return false
+    if (normalizeAliasText(text).contains(normalizedAlias)) return true
 
-    return normalizeAliasText(text).contains(normalizedAlias)
+    val canonicalAlias = canonicalMerchantIdentity(cleanedAlias)
+    val canonicalText = canonicalMerchantIdentity(text)
+    return canonicalAlias.length >= 3 && canonicalAlias == canonicalText
 }
 
 fun ruleMatchesTransaction(
@@ -127,22 +133,23 @@ fun previewMerchantAliasRule(
             if (matchedAliases.isEmpty()) {
                 null
             } else {
-                val canonicalName = draft.canonicalMerchantName.trim()
+                val requestedCanonicalName = draft.canonicalMerchantName.trim()
+                val canonicalName = requestedCanonicalName.takeUnless(::isPaymentInstrumentLabel).orEmpty()
                 val currentMerchant = transaction.displayMerchantName ?: transaction.merchantRaw
                 val willUpdateMerchant = canonicalName.isNotBlank() &&
-                        !transaction.merchantUserEdited &&
-                        !currentMerchant.equals(canonicalName, ignoreCase = true)
+                    !transaction.merchantUserEdited &&
+                    !currentMerchant.equals(canonicalName, ignoreCase = true)
 
                 val categoryName = draft.categoryName?.trim()?.ifBlank { null }
                 val willUpdateCategory = draft.applyCategory &&
-                        !transaction.categoryUserEdited &&
-                        transaction.categoryName != categoryName
+                    !transaction.categoryUserEdited &&
+                    transaction.categoryName != categoryName
 
                 val treatment = draft.transactionType?.trim()?.ifBlank { null }
                 val willUpdateTreatment = draft.applyTreatment &&
-                        !transaction.treatmentUserEdited &&
-                        treatment != null &&
-                        transaction.accountingTreatment != treatment
+                    !transaction.treatmentUserEdited &&
+                    treatment != null &&
+                    transaction.accountingTreatment != treatment
 
                 MerchantAliasPreviewItem(
                     transaction = transaction,
@@ -151,8 +158,8 @@ fun previewMerchantAliasRule(
                     willUpdateCategory = willUpdateCategory,
                     willUpdateTreatment = willUpdateTreatment,
                     skippedMerchantUserEdited = canonicalName.isNotBlank() &&
-                            transaction.merchantUserEdited &&
-                            !currentMerchant.equals(canonicalName, ignoreCase = true)
+                        transaction.merchantUserEdited &&
+                        !currentMerchant.equals(canonicalName, ignoreCase = true)
                 )
             }
         }
@@ -164,7 +171,8 @@ fun applyMerchantAliasRuleToTransaction(
     draft: MerchantAliasRuleDraft,
     now: Long = System.currentTimeMillis()
 ): TransactionEntity {
-    val canonicalName = draft.canonicalMerchantName.trim().ifBlank { null }
+    val requestedCanonicalName = draft.canonicalMerchantName.trim().ifBlank { null }
+    val canonicalName = requestedCanonicalName.takeUnless(::isPaymentInstrumentLabel)
     val categoryName = draft.categoryName?.trim()?.ifBlank { null }
     val treatment = draft.transactionType?.trim()?.ifBlank { null }
 
@@ -186,26 +194,34 @@ fun applyMerchantAliasRuleToTransaction(
         transaction.accountingTreatment
     }
 
+    val treatmentWasApplied = draft.applyTreatment &&
+        !transaction.treatmentUserEdited &&
+        treatment != null
+    val direction = transactionDirectionFromParserNotes(transaction.parserNotes)
+    val updatedExcluded = if (treatmentWasApplied) {
+        TransactionTreatments.defaultExcludedFromSpending(
+            treatment = updatedTreatment,
+            direction = direction
+        )
+    } else {
+        transaction.excludedFromSpending
+    }
+
+    val ruleResolvedTransaction =
+        (!canonicalName.isNullOrBlank() || !updatedMerchant.isNullOrBlank()) &&
+            (!draft.applyCategory || !updatedCategory.isNullOrBlank()) &&
+            (!draft.applyTreatment || treatmentWasApplied)
+
     return transaction.copy(
         merchantRaw = if (!transaction.merchantUserEdited) updatedMerchant else transaction.merchantRaw,
         displayMerchantName = updatedMerchant,
         categoryName = updatedCategory,
-        transactionType = if (draft.applyTreatment && !transaction.treatmentUserEdited && treatment != null) {
-            treatment
-        } else {
-            transaction.transactionType
-        },
+        transactionType = if (treatmentWasApplied) updatedTreatment else transaction.transactionType,
         accountingTreatment = updatedTreatment,
-        excludedFromSpending = if (draft.applyTreatment && !transaction.treatmentUserEdited && treatment != null) {
-            TransactionTreatments.defaultExcludedFromSpending(treatment)
-        } else {
-            transaction.excludedFromSpending
-        },
+        excludedFromSpending = updatedExcluded,
         reviewStatus = when {
             draft.requiresReview -> ReviewStatus.NEEDS_REVIEW
-            transaction.reviewStatus == ReviewStatus.NEEDS_REVIEW &&
-                    !updatedMerchant.isNullOrBlank() &&
-                    (!draft.applyCategory || !updatedCategory.isNullOrBlank()) -> ReviewStatus.AUTO_PARSED
+            transaction.reviewStatus == ReviewStatus.NEEDS_REVIEW && ruleResolvedTransaction -> ReviewStatus.REVIEWED
             else -> transaction.reviewStatus
         },
         updatedAtEpochMs = now
@@ -216,7 +232,14 @@ fun buildMerchantAliasRules(
     draft: MerchantAliasRuleDraft,
     now: Long = System.currentTimeMillis()
 ): List<TransactionRuleEntity> {
-    val canonicalName = draft.canonicalMerchantName.trim().ifBlank { null }
+    val requestedCanonicalName = draft.canonicalMerchantName.trim().ifBlank { null }
+    val canonicalName = requestedCanonicalName.takeUnless(::isPaymentInstrumentLabel)
+    val treatment = if (draft.applyTreatment) {
+        draft.transactionType?.trim()?.ifBlank { null }
+    } else {
+        null
+    }
+
     return draft.cleanedAliases.map { alias ->
         TransactionRuleEntity(
             sourceKey = draft.sourceKey,
@@ -225,15 +248,14 @@ fun buildMerchantAliasRules(
             ruleKind = RuleKind.SOURCE_ALIAS,
             merchantName = canonicalName,
             categoryName = if (draft.applyCategory) draft.categoryName?.trim()?.ifBlank { null } else null,
-            transactionType = if (draft.applyTreatment) draft.transactionType?.trim()?.ifBlank { null } else null,
-            reviewStatus = null,
-            excludedFromSpending = if (draft.applyTreatment) {
-                draft.transactionType
-                    ?.trim()
-                    ?.ifBlank { null }
-                    ?.let { TransactionTreatments.defaultExcludedFromSpending(it) }
-            } else {
-                null
+            transactionType = treatment,
+            reviewStatus = when {
+                draft.requiresReview -> ReviewStatus.NEEDS_REVIEW
+                treatment != null -> ReviewStatus.REVIEWED
+                else -> null
+            },
+            excludedFromSpending = treatment?.let { selectedTreatment ->
+                TransactionTreatments.defaultExcludedFromSpending(selectedTreatment)
             },
             appliesToTreatment = null,
             applyCategoryAutomatically = draft.applyCategory,

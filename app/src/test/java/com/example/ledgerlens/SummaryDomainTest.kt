@@ -269,8 +269,8 @@ class SummaryDomainTest {
     }
 
     @Test
-    fun reimbursementDefaultsOutsideSpendingView() {
-        assertTrue(TransactionTreatments.defaultExcludedFromSpending(TransactionTreatments.REIMBURSEMENT))
+    fun reimbursementDefaultsToNegativeSpendingOffset() {
+        assertFalse(TransactionTreatments.defaultExcludedFromSpending(TransactionTreatments.REIMBURSEMENT))
         assertEquals(
             -3500L,
             TransactionTreatments.spendingImpactCents(TransactionTreatments.REIMBURSEMENT, false, 3500)

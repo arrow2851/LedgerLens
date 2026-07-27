@@ -361,7 +361,7 @@ class SmsTransactionParserTest {
     }
 
     private fun jsonString(line: String, name: String): String {
-        val match = Regex("\"\"\"\"$name\":\"([^\"]*)\"\"\"")
+        val match = Regex("\"$name\":\"([^\"]*)\"")
             .find(line)
             ?: error("Missing JSON field $name in $line")
 

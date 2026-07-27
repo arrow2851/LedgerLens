@@ -31,7 +31,10 @@ jobs:
       - name: Run JVM unit tests
         id: unit_tests
         continue-on-error: true
-        run: ./gradlew testDebugUnitTest --stacktrace
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew testDebugUnitTest --stacktrace 2>&1 | tee unit-test.log
 
       - name: Retain test reports and parser source
         if: always()
@@ -41,6 +44,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
           path: |
+            unit-test.log
             app/build/test-results/testDebugUnitTest
             app/build/reports/tests/testDebugUnitTest
             app/src/main/java/com/example/ledgerlens/domain/parser

@@ -44,7 +44,7 @@ object FinancialSmsClassifier {
         "spent",
         "purchase",
         "charged",
-        "charge at",
+        "charge",
         "chrge or hold",
         "debit card purchase",
         "debit card transaction",

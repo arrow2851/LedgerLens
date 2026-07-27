@@ -18,20 +18,6 @@ private val processorPrefixRegex = Regex(
     pattern = """(?i)^(?:TST\*|SQ\s*\*|SP\s+|CKE\*|PAYPAL\s*\*|PP\*|TOAST\*|CL\*|APL\*)"""
 )
 
-private val locationTokens = setOf(
-    "TX",
-    "TEXAS",
-    "IRVING",
-    "PLANO",
-    "DALLAS",
-    "MURPHY",
-    "FRISCO",
-    "RICHARDSON",
-    "GARLAND",
-    "CARROLLTON",
-    "MCKINNEY"
-)
-
 fun parseAuthorizedCardholderLabel(value: String?): AuthorizedCardholderLabel? {
     val cleaned = value
         ?.replace('’', '\'')
@@ -63,26 +49,17 @@ fun canonicalMerchantIdentity(value: String?): String {
         .replace(Regex("""\s+"""), " ")
         .trim()
 
-    val tokens = cleaned
+    val normalized = cleaned
         .split(' ')
-        .filter { token -> token.isNotBlank() && token !in locationTokens }
-        .filterNot { token -> token in setOf("LLC", "INC", "CORP", "CO") }
+        .filter { it.isNotBlank() }
+        .filterNot { it in setOf("LLC", "INC", "CORP", "CO") }
+        .joinToString(" ")
 
-    val normalized = tokens.joinToString(" ")
     return when {
         normalized.startsWith("WAL MART") ||
             normalized.startsWith("WALMART") ||
             normalized.startsWith("WM SUPERCENTER") -> "WALMART"
 
-        normalized.startsWith("DECCAN MORSELS") -> "DECCAN MORSELS"
-        normalized.startsWith("DESI DISTRICT") -> "DESI DISTRICT"
-        normalized.startsWith("CHICHAS") -> "CHICHAS"
-        normalized.startsWith("DESI CHOWRASTHA") -> "DESI CHOWRASTHA"
-        normalized.startsWith("SPICE WOK") -> "SPICE WOK"
-        normalized.startsWith("PLANO INDOPAK SUPERMAR") ||
-            normalized.startsWith("INDOPAK SUPERMARKET") -> "INDOPAK SUPERMARKET"
-
-        normalized.startsWith("4TE IACC") || normalized.startsWith("IACC") -> "IACC"
         else -> normalized
     }
 }

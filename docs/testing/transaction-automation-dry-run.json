@@ -1,0 +1,31 @@
+{
+  "dataset": {
+    "transactions": 456,
+    "diagnosticRecords": 495,
+    "privacy": "Aggregate metrics only. Raw financial exports and personal transaction data are intentionally excluded from this public repository."
+  },
+  "before": {
+    "reviewTransactions": 38,
+    "uncategorizedSpendingTransactions": 80,
+    "uncategorizedSpendingMerchantGroups": 54
+  },
+  "after": {
+    "activeTransactions": 453,
+    "ignoredNonTransactions": 3,
+    "reviewTransactions": 18,
+    "reviewDecisionGroups": 13,
+    "uncategorizedSpendingTransactions": 54,
+    "uncategorizedSpendingMerchantGroups": 46,
+    "authorizedUserMerchantRepairs": 1,
+    "duplicateCandidatesFlagged": 15
+  },
+  "reduction": {
+    "reviewTransactionsEliminated": 20,
+    "categoryRowsFilledAutomatically": 26
+  },
+  "safety": {
+    "conflictingRuleGroupsBlocked": 1,
+    "duplicatesAutomaticallyDeleted": 0,
+    "rawExportsCommitted": false
+  }
+}

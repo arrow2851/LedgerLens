@@ -17,7 +17,7 @@ data class TransactionDetails(
 object DetailsExtractor {
  fun institutionFor(b:String):String?=when {
   b.contains("Capital One",true)->"Capital One"
-  b.contains("Chase",true)||b.contains("Zelle(R)",true)->"Chase"
+  b.contains("Chase",true)->"Chase"
   b.contains("HDFC Bank",true)->"HDFC Bank"
   b.contains("SBI",true)->"SBI"
   else->null
@@ -35,7 +35,7 @@ object DetailsExtractor {
    p.rule.startsWith("ZELLE_")->"ZELLE"
    p.kind=="CARD_PAYMENT"->"CARD_REPAYMENT"
    p.rule.startsWith("CAPITAL_ONE_")&&p.kind=="PURCHASE"->"CREDIT_CARD"
-   p.kind=="PURCHASE"->"DEBIT_CARD"
+   (p.rule=="HDFC_DEBIT_CARD"||(p.rule=="CHASE_ACCOUNT_ALERT"&&p.kind=="PURCHASE"))->"DEBIT_CARD"
    p.rule=="CHASE_WIRE_ALERT"->"WIRE"
    p.rule=="CHASE_ATM_DEPOSIT"->"ATM"
    p.rule=="CHASE_ACCOUNT_ALERT"&&p.kind=="DEPOSIT"->"DIRECT_DEPOSIT"
@@ -63,6 +63,6 @@ object DetailsExtractor {
    else->null
   }
   return TransactionDetails(bank,method,party,role,namedHolder(body),
-   last4(body),grab("""Chase\s+acct\s+(\d{4})""",body)?:p.accountSuffix,note)
+   last4(body),grab("""Chase\s+acct\s+(\d{4})""",body)?:if(bank=="Capital One")null else p.accountSuffix,note)
  }
 }

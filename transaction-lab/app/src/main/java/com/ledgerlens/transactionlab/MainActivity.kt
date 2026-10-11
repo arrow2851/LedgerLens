@@ -98,6 +98,10 @@ class MainActivity: ComponentActivity() {
                                         j.name("category").value(edit.category)
                                         j.name("reviewed").value(edit.reviewed)
                                         j.name("ignored").value(edit.ignored)
+                                        j.name("counterparty").value(edit.counterparty)
+                                        j.name("payment_method").value(edit.paymentMethod)
+                                        j.name("cardholder").value(edit.cardholder)
+                                        j.name("card_last4").value(edit.cardLast4)
                                         j.endObject()
                                     }
                                     j.endArray()
@@ -268,7 +272,7 @@ private fun LabScreen(
                 ) {
                     Column(Modifier.fillMaxWidth().padding(14.dp)) {
                         Row(verticalAlignment=Alignment.CenterVertically) {
-                            Text(m?.merchant?.takeIf { it.isNotBlank() } ?: p.merchant?.takeIf{it.isNotBlank()} ?: item.sender,
+                            Text(m?.merchant?.takeIf { it.isNotBlank() } ?: item.details.title(p),
                                 modifier=Modifier.weight(1f),fontWeight=FontWeight.SemiBold,color=textPrimary,
                                 maxLines=1,overflow=TextOverflow.Ellipsis)
                             Text(m?.amount?.takeIf{it.isNotBlank()} ?: moneyString(p.amountMinor).ifBlank { "—" },
@@ -279,6 +283,9 @@ private fun LabScreen(
                         Spacer(Modifier.height(4.dp))
                         Text((m?.kind ?: p.kind)+" · "+(m?.direction ?: p.direction)+" · "+(m?.lifecycle ?: p.lifecycle),
                             fontSize=12.sp,color=if((m?.lifecycle ?: p.lifecycle)=="PENDING")amber else soft)
+                        Text("Via "+(m?.paymentMethod?.takeIf{it.isNotBlank()} ?: item.details.method ?: "UNKNOWN")+
+                            " · "+(m?.cardholder?.takeIf{it.isNotBlank()} ?: item.details.cardholder ?: item.details.institution ?: "Issuer unknown"),
+                            fontSize=11.sp,color=leaf,maxLines=1)
                         Text((if(m?.reviewed==true)"✓ Reviewed" else if(p.outcome=="NEEDS_REVIEW")"Needs parsing review" else "Unreviewed")+" · "+item.sender,
                             fontSize=11.sp,color=soft,maxLines=1)
                         Text(item.body.replace("\n"," ").take(130),fontSize=11.sp,color=soft,maxLines=2,
@@ -320,9 +327,14 @@ private fun DetailPage(row:SmsRow,override:ManualEdit?,onBack:()->Unit,onSave:(M
     var lifecycle by remember(row.id,override) { mutableStateOf(override?.lifecycle ?: p.lifecycle) }
     var category by remember(row.id,override) { mutableStateOf(override?.category.orEmpty()) }
     var ignored by remember(row.id,override) { mutableStateOf(override?.ignored ?: false) }
+    var counterparty by remember(row.id,override){mutableStateOf(override?.counterparty?.takeIf{it.isNotBlank()} ?: row.details.counterparty.orEmpty())}
+    var paymentMethod by remember(row.id,override){mutableStateOf(override?.paymentMethod?.takeIf{it.isNotBlank()} ?: row.details.method.orEmpty())}
+    var cardholder by remember(row.id,override){mutableStateOf(override?.cardholder?.takeIf{it.isNotBlank()} ?: row.details.cardholder.orEmpty())}
+    var cardLast4 by remember(row.id,override){mutableStateOf(override?.cardLast4?.takeIf{it.isNotBlank()} ?: row.details.cardLast4.orEmpty())}
     val valid=amountValid(amount)
     val save:(Boolean)->Unit={ reviewed ->
-        if(valid) onSave(ManualEdit(merchant,amount,kind,direction,lifecycle,category,reviewed,ignored))
+        if(valid) onSave(ManualEdit(merchant,amount,kind,direction,lifecycle,category,reviewed,ignored,
+            counterparty,paymentMethod,cardholder,cardLast4))
     }
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(18.dp)) {
         Text("← Transaction list",modifier=Modifier.clickable(onClick=onBack).padding(vertical=8.dp),color=leaf)
@@ -338,6 +350,10 @@ private fun DetailPage(row:SmsRow,override:ManualEdit?,onBack:()->Unit,onSave:(M
                 }
             }
             Text("PARSER   "+p.rule,fontSize=12.sp,color=leaf,fontWeight=FontWeight.Bold)
+            Text("Institution: "+(row.details.institution ?: "Unknown"),color=soft,fontSize=12.sp)
+            Text("Party role: "+(row.details.role ?: "Not established"),color=soft,fontSize=12.sp)
+            Text("Account: "+(row.details.accountLast4?.let{"••••"+it} ?: "Not stated"),color=soft,fontSize=12.sp)
+            if(row.details.note!=null)Text(row.details.note,color=amber,fontSize=12.sp)
             if(p.note.isNotBlank()) Text(p.note,fontSize=12.sp,color=soft)
             if(p.outcome=="NEEDS_REVIEW") Text("⚠ Incomplete or generic match. Do not assume it is a valid transaction.",color=amber,fontSize=12.sp)
             Text("Correct extraction",fontWeight=FontWeight.Bold,fontSize=17.sp)
@@ -345,7 +361,15 @@ private fun DetailPage(row:SmsRow,override:ManualEdit?,onBack:()->Unit,onSave:(M
                 singleLine=true,isError=!valid,label={Text("Amount ("+(p.currency ?: "currency unknown")+")")})
             if(!valid) Text("Enter a nonnegative amount with at most two decimal places.",color=alert,fontSize=11.sp)
             OutlinedTextField(merchant,onValueChange={merchant=it},modifier=Modifier.fillMaxWidth(),
-                label={Text("Merchant / counterparty")},singleLine=true)
+                label={Text("Merchant (for purchases)")},singleLine=true)
+            OutlinedTextField(counterparty,onValueChange={counterparty=it},modifier=Modifier.fillMaxWidth(),
+                label={Text("Counterparty / sender / recipient / issuer")},singleLine=true)
+            OutlinedTextField(paymentMethod,onValueChange={paymentMethod=it},modifier=Modifier.fillMaxWidth(),
+                label={Text("Method (Zelle, card, wire, etc.)")},singleLine=true)
+            OutlinedTextField(cardholder,onValueChange={cardholder=it},modifier=Modifier.fillMaxWidth(),
+                label={Text("Named cardholder (only if known)")},singleLine=true)
+            OutlinedTextField(cardLast4,onValueChange={cardLast4=it},modifier=Modifier.fillMaxWidth(),
+                label={Text("Card last four (if known)")},singleLine=true)
             OutlinedTextField(category,onValueChange={category=it},modifier=Modifier.fillMaxWidth(),
                 label={Text("Category (optional)")},singleLine=true)
             ChoiceRow("TYPE",listOf("PURCHASE","TRANSFER","DEPOSIT","CARD_PAYMENT","CASH_WITHDRAWAL","REFUND","REVERSAL","FEE","UNKNOWN"),kind){kind=it}

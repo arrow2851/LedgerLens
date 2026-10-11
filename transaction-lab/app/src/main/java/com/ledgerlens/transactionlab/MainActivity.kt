@@ -356,7 +356,7 @@ private fun annotatedEvidence(text:String,p:Parsed) = buildAnnotatedString {
 @Composable
 private fun DetailPage(row:SmsRow,override:ManualEdit?,onBack:()->Unit,onSave:(ManualEdit)->Unit) {
     val p=row.parsed
-    var merchant by remember(row.id,override) { mutableStateOf(override?.merchant ?: p.merchant.orEmpty()) }
+    var merchant by remember(row.id,override) { mutableStateOf(if(p.kind=="PURCHASE") (override?.merchant ?: p.merchant.orEmpty()) else "") }
     var amount by remember(row.id,override) { mutableStateOf(override?.amount ?: moneyString(p.amountMinor)) }
     var kind by remember(row.id,override) { mutableStateOf(override?.kind ?: p.kind) }
     var direction by remember(row.id,override) { mutableStateOf(override?.direction ?: p.direction) }

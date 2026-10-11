@@ -50,21 +50,28 @@ private val alert = Color(0xFFFFB4A2)
 
 class MainActivity: ComponentActivity() {
     private lateinit var store: EditStore
+    private lateinit var sourceStore: SourceStore
     private var allowed by mutableStateOf(false)
     private var busy by mutableStateOf(false)
     private var data by mutableStateOf<ScanResult?>(null)
     private var edits by mutableStateOf<Map<Long,ManualEdit>>(emptyMap())
     private var notice by mutableStateOf<String?>(null)
+    private var sources by mutableStateOf<List<SourceProfile>?>(null)
+    private var selectedSources by mutableStateOf<Set<String>>(emptySet())
+    private var sourceMode by mutableStateOf(true)
+    private var discovering by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
         store = EditStore(this)
+        sourceStore=SourceStore(this)
+        selectedSources=sourceStore.load()
         edits = store.load()
         refreshPermission()
         setContent {
             val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { result ->
                 allowed = result
-                if (result) beginScan() else notice = "READ_SMS permission was denied."
+                if (result) beginDiscovery() else notice = "READ_SMS permission was denied."
             }
             val createFile = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
                 if (uri != null) lifecycleScope.launch {
@@ -108,6 +115,11 @@ class MainActivity: ComponentActivity() {
             )) {
                 LabScreen(
                     allowed=allowed, busy=busy, data=data, edits=edits, notice=notice,
+                    sources=sources, selectedSources=selectedSources, sourceMode=sourceMode, discovering=discovering,
+                    onDiscover={beginDiscovery()},
+                    onSelectSources={ids->selectedSources=ids;sourceStore.save(ids)},
+                    onStartSelectedScan={if(selectedSources.isNotEmpty()){sourceMode=false;beginScan()}},
+                    onChooseSources={sourceMode=true},
                     onGrant = { permission.launch(Manifest.permission.READ_SMS) },
                     onScan = { if (allowed) beginScan() else permission.launch(Manifest.permission.READ_SMS) },
                     onSave = { id, edit ->
@@ -125,12 +137,25 @@ class MainActivity: ComponentActivity() {
         allowed = ContextCompat.checkSelfPermission(this,Manifest.permission.READ_SMS)==PackageManager.PERMISSION_GRANTED
         if (!allowed) data = null
     }
+    private fun beginDiscovery(){
+        if(!allowed||discovering)return
+        discovering=true
+        notice=null
+        lifecycleScope.launch{
+            try{ sources=withContext(Dispatchers.IO){discoverSources(applicationContext)} }
+            catch(e:Exception){notice="Could not list sources: "+e.message}
+            finally{discovering=false}
+        }
+    }
     private fun beginScan() {
         if (!allowed || busy) return
         busy=true
         notice=null
         lifecycleScope.launch {
-            try { data=withContext(Dispatchers.IO) { scanTransactions(applicationContext) } }
+            try {
+                val chosen=selectedSources.toSet()
+                data=withContext(Dispatchers.IO){scanTransactions(applicationContext,chosen)}
+            }
             catch (e:Exception) { notice="Scan failed: "+ e.message }
             finally { busy=false }
         }
@@ -140,8 +165,14 @@ class MainActivity: ComponentActivity() {
 @Composable
 private fun LabScreen(
     allowed:Boolean, busy:Boolean, data:ScanResult?, edits:Map<Long,ManualEdit>, notice:String?,
+    sources:List<SourceProfile>?,selectedSources:Set<String>,sourceMode:Boolean,discovering:Boolean,
+    onDiscover:()->Unit,onSelectSources:(Set<String>)->Unit,onStartSelectedScan:()->Unit,onChooseSources:()->Unit,
     onGrant:()->Unit, onScan:()->Unit, onSave:(Long,ManualEdit)->Unit, onExport:()->Unit
 ) {
+    if(allowed&&sourceMode){
+        SourcePickerUi(sources,selectedSources,discovering,notice,onDiscover,onSelectSources,onStartSelectedScan)
+        return
+    }
     var detailId by remember { mutableStateOf<Long?>(null) }
     val chosen = data?.rows?.find { it.id == detailId }
     if (chosen != null) {
@@ -190,9 +221,10 @@ private fun LabScreen(
         Spacer(Modifier.height(8.dp))
         Text(data.total.toString()+" SMS scanned · "+data.ignored+" ignored by rules · "+edits.size+" corrections",fontSize=12.sp,color=soft)
         Spacer(Modifier.height(10.dp))
-        Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
-            OutlinedButton(onClick=onScan,enabled=!busy,modifier=Modifier.weight(1f)) { Text("Rescan") }
-            Button(onClick=onExport,modifier=Modifier.weight(1.5f),enabled=!busy) { Text("Export corrections") }
+        Row(horizontalArrangement=Arrangement.spacedBy(5.dp)) {
+            OutlinedButton(onClick=onChooseSources,modifier=Modifier.weight(1f)){Text("Sources",fontSize=11.sp)}
+            OutlinedButton(onClick=onScan,enabled=!busy,modifier=Modifier.weight(1f)){Text("Rescan",fontSize=11.sp)}
+            Button(onClick=onExport,modifier=Modifier.weight(1.4f),enabled=!busy){Text("Corrections",fontSize=11.sp)}
         }
         if(busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top=6.dp))
         if(notice!=null) Text(notice,color=amber,fontSize=12.sp,modifier=Modifier.padding(top=6.dp))

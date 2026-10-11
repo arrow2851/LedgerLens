@@ -13,3 +13,11 @@ Second functionality-first mini app (separate package from Source Scout).
 - Android 8.0+ and READ_SMS permission; build with gradle -p transaction-lab :app:testDebugUnitTest :app:assembleDebug.
 - This is separate from your existing LedgerLens app and does not write into that app's database.
 - App source is in GitHub. Absolutely no exported SMS data or derived customer financial records committed.
+
+## v0.2 functionality
+
+Source picker is mandatory before transaction scanning: discover on device, view sender labels with inferred institution and potential transaction counts, choose Suggested/All/custom senders, save selection, then scan only chosen senders. Change Sources and rescan later.
+
+Transaction detail fields are separate: institution, payment method, sender/recipient/card issuer, cardholder if explicitly named, card last four when available, account last four when evidenced. Merchants apply to purchases; Zelle and card repayments are described by their specific roles. Authorization holds remain provisional, repayments are not additional purchases, scheduled payments and OTPs are ignored when identifiable. User corrections can be exported and imported as JSON through the Android system picker.
+
+No user financial data is in GitHub. The app has no INTERNET permission. The local correction store contains merchant/party names and values (not SMS bodies) in private app preferences. Review sensitive correction exports before sharing. A debug APK built on a new CI runner may have a different signing key and require uninstalling the older Transaction Lab first; export its corrections before uninstalling.

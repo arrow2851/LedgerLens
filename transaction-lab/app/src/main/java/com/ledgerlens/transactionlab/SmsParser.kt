@@ -26,7 +26,7 @@ object SmsParser {
     private const val MONEY = """(?<amount>\d[\d,]*(?:\.\d{1,2})?)(?![\d.,])"""
     private const val MONTH = """(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"""
     private fun p(s: String) = Pattern.compile(s, Pattern.CASE_INSENSITIVE or Pattern.DOTALL)
-    private val auth = p("""\b(?:otp|one[ -]?time (?:password|passcode)|verification code|authentication code|authorization code|sign[ -]?in code|security code|passcode|your [\w ]{0,28}code is|is your code|code to (?:verify|sign in|log ?in)|do not share this code)\b""")
+    private val auth = p("""\b(?:otp|one[ -]?time (?:password|passcode)|verification code|temporary code|temporary verification code|authentication code|authorization code|sign[ -]?in code|security code|passcode|your [\w ]{0,28}code is|is your code|code to (?:verify|sign in|log ?in)|do not share this code)\b""")
     private val promotional = p("""\b(?:cashback offer|offer valid|shop now|get \$\d+ off|you get \$\d+ off|qualify for|click here to|refer a friend|sign up|get upto|sale ends|promo code)\b""")
     private val scheduled = p("""\b(?:is scheduled|will be paid|payment due|payment reminder|minimum payment due|past due|your statement|balance is|available balance|credit limit)\b""")
     private val negative = p("""\b(?:declined|failed|unsuccessful|could not be processed|was not approved)\b""")

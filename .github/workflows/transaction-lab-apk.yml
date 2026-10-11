@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - build/transaction-lab-2026-10-11
+      - build/transaction-lab-v02-2026-10-11
   workflow_dispatch:
 jobs:
   apk:
@@ -34,6 +35,6 @@ jobs:
         run: gradle -p transaction-lab :app:assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
         with:
-          name: LedgerLens-Transaction-Lab-v0.1-debug-apk
+          name: LedgerLens-Transaction-Lab-v0.2-debug-apk
           path: transaction-lab/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error

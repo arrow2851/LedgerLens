@@ -6,10 +6,10 @@ import org.json.JSONObject
 import java.math.BigDecimal
 import java.math.RoundingMode
 
-data class SmsRow(val id: Long, val sender: String, val body: String, val timestamp: Long, val parsed: Parsed)
+data class SmsRow(val id: Long, val sender: String, val body: String, val timestamp: Long, val parsed: Parsed, val details: TransactionDetails)
 data class ScanResult(val total: Int, val ignored: Int, val rows: List<SmsRow>)
 
-fun scanTransactions(context: Context): ScanResult {
+fun scanTransactions(context: Context, selectedSources:Set<String>): ScanResult {
     val rows = ArrayList<SmsRow>()
     var count = 0
     var ignored = 0
@@ -24,11 +24,12 @@ fun scanTransactions(context: Context): ScanResult {
         val type = c.getColumnIndexOrThrow(Telephony.Sms.TYPE)
         while (c.moveToNext()) {
             count++
-            val b = c.getString(body).orEmpty()
             val s = c.getString(sender).orEmpty()
+            if (s !in selectedSources) { ignored++; continue }
+            val b = c.getString(body).orEmpty()
             val p = SmsParser.parse(b,s,c.getInt(type) == Telephony.Sms.MESSAGE_TYPE_INBOX)
             if (p.outcome == "IGNORED") { ignored++; continue }
-            rows.add(SmsRow(c.getLong(id), s, b, c.getLong(date), p))
+            rows.add(SmsRow(c.getLong(id), s, b, c.getLong(date), p, DetailsExtractor.extract(b,p)))
         }
     }
     return ScanResult(count,ignored,rows)
@@ -42,7 +43,11 @@ data class ManualEdit(
     val lifecycle: String,
     val category: String,
     val reviewed: Boolean,
-    val ignored: Boolean
+    val ignored: Boolean,
+    val counterparty: String = "",
+    val paymentMethod: String = "",
+    val cardholder: String = "",
+    val cardLast4: String = ""
 ) {
     fun json(id: Long) = JSONObject().apply {
         put("sms_id",id)
@@ -54,12 +59,18 @@ data class ManualEdit(
         put("category",category)
         put("reviewed",reviewed)
         put("ignored",ignored)
+        put("counterparty",counterparty)
+        put("payment_method",paymentMethod)
+        put("cardholder",cardholder)
+        put("card_last4",cardLast4)
     }
     companion object {
         fun from(obj: JSONObject) = ManualEdit(
             obj.optString("merchant"),obj.optString("amount"),obj.optString("kind","UNKNOWN"),
             obj.optString("direction","UNKNOWN"),obj.optString("lifecycle","UNKNOWN"),
-            obj.optString("category"),obj.optBoolean("reviewed"),obj.optBoolean("ignored")
+            obj.optString("category"),obj.optBoolean("reviewed"),obj.optBoolean("ignored"),
+            obj.optString("counterparty"),obj.optString("payment_method"),
+            obj.optString("cardholder"),obj.optString("card_last4")
         )
     }
 }

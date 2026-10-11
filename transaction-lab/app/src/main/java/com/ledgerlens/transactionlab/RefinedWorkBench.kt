@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -54,6 +55,7 @@ internal fun PolishedLab(
         return
     }
     val record=data?.rows?.firstOrNull{it.id==openedId}
+    BackHandler(enabled=record!=null) { openedId=null }
     if(record!=null){
         RefinedDetailScreen(row=record,edit=edits[record.id],
             onBack={openedId=null},
@@ -85,7 +87,7 @@ internal fun PolishedLab(
     var search by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf("All") }
     var menuOpen by remember { mutableStateOf(false) }
-    val pending=data.rows.count{it.parsed.lifecycle=="PENDING" && edits[it.id]?.lifecycle?:"PENDING"=="PENDING" && edits[it.id]?.ignored!=true}
+    val pending=data.rows.count{ (edits[it.id]?.lifecycle ?: it.parsed.lifecycle)=="PENDING" && edits[it.id]?.ignored!=true }
     val todo=data.rows.count{edits[it.id]?.reviewed!=true && edits[it.id]?.ignored!=true}
     val ignored=edits.values.count{it.ignored}
     val shown=remember(data,edits,filter,search){

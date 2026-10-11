@@ -21,3 +21,14 @@ Source picker is mandatory before transaction scanning: discover on device, view
 Transaction detail fields are separate: institution, payment method, sender/recipient/card issuer, cardholder if explicitly named, card last four when available, account last four when evidenced. Merchants apply to purchases; Zelle and card repayments are described by their specific roles. Authorization holds remain provisional, repayments are not additional purchases, scheduled payments and OTPs are ignored when identifiable. User corrections can be exported and imported as JSON through the Android system picker.
 
 No user financial data is in GitHub. The app has no INTERNET permission. The local correction store contains merchant/party names and values (not SMS bodies) in private app preferences. Review sensitive correction exports before sharing. A debug APK built on a new CI runner may have a different signing key and require uninstalling the older Transaction Lab first; export its corrections before uninstalling.
+
+
+## v0.3 — user experience rebuild
+
+- An independent, polished design system with warm-paper canvas, forest-green actions, intentional typography, low-contrast separators and minimum 46–54dp major touch targets.
+- Source-first onboarding with on-device sender discovery, ranked and searchable source cards, explicit selection, suggested/all filtering, and a persistent primary scan action.
+- Transaction workbench: focused summary, review/pending/confirmed states, search across source and transaction details, review filters, and secondary actions in the Manage menu.
+- Transaction evidence editor: clear amount and transaction roles, separate cardholder/counterparty fields, structured type/direction/status controls, expandable highlighted original SMS, sticky save and review actions.
+- No internet permission or server analytics; sensitive source data stays on device.
+- Corrections import/export and selected-sender persistence remain compatible with v0.2.
+- This is a functional mini app: confidence scores, source authentication, accessibility instrumentation, settlement reconciliation and finance analytics are future work.

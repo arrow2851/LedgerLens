@@ -184,8 +184,8 @@ internal fun RefinedDetailScreen(
             LabField(category,"Category",{category=it},
                 support="Optional; category automation comes in a later mini app")
             LabOptionField("Transaction type",kind,
-                listOf("PURCHASE","TRANSFER","DEPOSIT","CARD_PAYMENT","CASH_WITHDRAWAL","REFUND","REVERSAL","FEE","UNKNOWN")
-            ){kind=it}
+                listOf("PURCHASE","TRANSFER","DEPOSIT","CARD_PAYMENT","CASH_WITHDRAWAL","REFUND","REVERSAL","FEE","UNKNOWN"),
+                onSelect={kind=it})
             Row(horizontalArrangement=Arrangement.spacedBy(10.dp)){
                 LabOptionField("Direction",direction,
                     listOf("IN","OUT","UNKNOWN"),{direction=it},Modifier.weight(1f))

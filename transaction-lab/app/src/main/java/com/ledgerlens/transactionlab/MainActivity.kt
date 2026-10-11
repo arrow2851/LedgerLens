@@ -64,6 +64,14 @@ class MainActivity: ComponentActivity() {
 
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
+        @Suppress("DEPRECATION")
+        window.statusBarColor = android.graphics.Color.rgb(247,246,242)
+        @Suppress("DEPRECATION")
+        window.navigationBarColor = android.graphics.Color.rgb(247,246,242)
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility =
+            android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or
+            android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         store = EditStore(this)
         sourceStore=SourceStore(this)
         selectedSources=sourceStore.load()
@@ -142,11 +150,12 @@ class MainActivity: ComponentActivity() {
                     } catch(e:Exception){notice="Import failed: "+e.message}
                 }
             }
-            MaterialTheme(colorScheme = darkColorScheme(
-                primary=leaf, onPrimary=ink, background=ink, onBackground=textPrimary,
-                surface=sheet, onSurface=textPrimary
+            MaterialTheme(colorScheme = lightColorScheme(
+                primary=LabColors.green, onPrimary=androidx.compose.ui.graphics.Color.White,
+                background=LabColors.canvas, onBackground=LabColors.ink,
+                surface=LabColors.paper, onSurface=LabColors.ink
             )) {
-                LabScreen(
+                PolishedLab(
                     allowed=allowed, busy=busy, data=data, edits=edits, notice=notice,
                     sources=sources, selectedSources=selectedSources, sourceMode=sourceMode, discovering=discovering,
                     onDiscover={beginDiscovery()},

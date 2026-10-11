@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.JsonWriter
+import org.json.JSONObject
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -113,6 +114,34 @@ class MainActivity: ComponentActivity() {
                     } catch (e:Exception) { notice = "Export failed: " + e.message }
                 }
             }
+            val importFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                if (uri != null) lifecycleScope.launch {
+                    try {
+                        val imports = withContext(Dispatchers.IO) {
+                            val input = contentResolver.openInputStream(uri)
+                                ?: throw IllegalStateException("Could not open file")
+                            val root = input.bufferedReader(Charsets.UTF_8).use {
+                                JSONObject(it.readText())
+                            }
+                            require(root.optString("export_type")=="TRANSACTION_LAB_USER_CORRECTIONS"){
+                                "This is not a Transaction Lab corrections JSON."
+                            }
+                            val arr = root.getJSONArray("corrections")
+                            require(arr.length()<=10000){"Too many corrections"}
+                            val output = LinkedHashMap<Long,ManualEdit>()
+                            for (i in 0 until arr.length()) {
+                                val obj=arr.getJSONObject(i)
+                                val id=obj.getLong("sms_id")
+                                output[id]=ManualEdit.from(obj)
+                            }
+                            output
+                        }
+                        for ((id, edit) in imports) store.save(id,edit)
+                        edits=edits+imports
+                        notice=imports.size.toString()+" corrections restored on this device."
+                    } catch(e:Exception){notice="Import failed: "+e.message}
+                }
+            }
             MaterialTheme(colorScheme = darkColorScheme(
                 primary=leaf, onPrimary=ink, background=ink, onBackground=textPrimary,
                 surface=sheet, onSurface=textPrimary
@@ -131,7 +160,8 @@ class MainActivity: ComponentActivity() {
                         edits = edits + (id to edit)
                         notice = "Correction saved on this device."
                     },
-                    onExport = { createFile.launch("ledgerlens-transaction-lab-corrections.json") }
+                    onExport = { createFile.launch("ledgerlens-transaction-lab-corrections.json") },
+                    onImport = { importFile.launch(arrayOf("application/json")) }
                 )
             }
         }
@@ -171,7 +201,8 @@ private fun LabScreen(
     allowed:Boolean, busy:Boolean, data:ScanResult?, edits:Map<Long,ManualEdit>, notice:String?,
     sources:List<SourceProfile>?,selectedSources:Set<String>,sourceMode:Boolean,discovering:Boolean,
     onDiscover:()->Unit,onSelectSources:(Set<String>)->Unit,onStartSelectedScan:()->Unit,onChooseSources:()->Unit,
-    onGrant:()->Unit, onScan:()->Unit, onSave:(Long,ManualEdit)->Unit, onExport:()->Unit
+    onGrant:()->Unit, onScan:()->Unit, onSave:(Long,ManualEdit)->Unit, onExport:()->Unit,
+    onImport:()->Unit
 ) {
     if(allowed&&sourceMode){
         SourcePickerUi(sources,selectedSources,discovering,notice,onDiscover,onSelectSources,onStartSelectedScan)
@@ -230,6 +261,9 @@ private fun LabScreen(
             OutlinedButton(onClick=onScan,enabled=!busy,modifier=Modifier.weight(1f)){Text("Rescan",fontSize=11.sp)}
             Button(onClick=onExport,modifier=Modifier.weight(1.4f),enabled=!busy){Text("Corrections",fontSize=11.sp)}
         }
+        OutlinedButton(onClick=onImport,enabled=!busy,modifier=Modifier.fillMaxWidth()) {
+            Text("Import saved corrections")
+        }
         if(busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top=6.dp))
         if(notice!=null) Text(notice,color=amber,fontSize=12.sp,modifier=Modifier.padding(top=6.dp))
         Spacer(Modifier.height(9.dp))
@@ -272,7 +306,9 @@ private fun LabScreen(
                 ) {
                     Column(Modifier.fillMaxWidth().padding(14.dp)) {
                         Row(verticalAlignment=Alignment.CenterVertically) {
-                            Text(m?.merchant?.takeIf { it.isNotBlank() } ?: item.details.title(p),
+                            Text(if(p.kind=="CARD_PAYMENT"||item.details.method=="ZELLE")
+                                item.details.title(p)
+                            else m?.merchant?.takeIf { it.isNotBlank() } ?: item.details.title(p),
                                 modifier=Modifier.weight(1f),fontWeight=FontWeight.SemiBold,color=textPrimary,
                                 maxLines=1,overflow=TextOverflow.Ellipsis)
                             Text(m?.amount?.takeIf{it.isNotBlank()} ?: moneyString(p.amountMinor).ifBlank { "—" },

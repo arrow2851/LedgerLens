@@ -1,0 +1,30 @@
+name: Build Source Scout APK
+on:
+  push:
+    branches:
+      - build/source-scout-2026-10-11
+  workflow_dispatch:
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android platform
+        run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Build debug APK
+        run: gradle -p scout :app:assembleDebug --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LedgerLens-Source-Scout-debug-apk
+          path: scout/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

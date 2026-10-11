@@ -240,7 +240,7 @@ private fun RefinedTransactionCard(item:SmsRow,edit:ManualEdit?,onClick:()->Unit
     val review=edit?.reviewed==true
     val attention=p.outcome=="NEEDS_REVIEW"
     val amount=edit?.amount?.takeIf{it.isNotBlank()} ?: moneyString(p.amountMinor)
-    val sign=if((edit?.direction?:p.direction)=="IN")+" else if((edit?.direction?:p.direction)=="OUT")"−" else ""
+    val sign=if ((edit?.direction ?: p.direction)=="IN") "+" else if ((edit?.direction ?: p.direction)=="OUT") "−" else ""
     val symbol=when(p.currency){"USD"->"$";"INR"->"₹";else->""}
     Surface(color=LabColors.paper,shape=RoundedCornerShape(18.dp),
         border=BorderStroke(1.dp,LabColors.line),onClick=onClick){

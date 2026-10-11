@@ -29,9 +29,16 @@ internal fun RefinedSourceScreen(
         Column(Modifier.weight(1f).padding(horizontal=22.dp).padding(top=22.dp)) {
             LabChrome(1)
             Spacer(Modifier.height(20.dp))
-            LabHeading("Make your money\nmessages matter.",
-                "First, choose which SMS senders may create transactions. You stay in control of every source.")
-            Spacer(Modifier.height(22.dp))
+            if(sources==null || !allowed) {
+                LabHeading("Make your money\nmessages matter.",
+                    "First, choose which SMS senders may create transactions. You stay in control of every source.")
+            } else {
+                Text("Select your sources",fontSize=25.sp,fontWeight=FontWeight.SemiBold,color=LabColors.ink)
+                Spacer(Modifier.height(3.dp))
+                Text("Select by sender, then scan only the messages you trust.",
+                    fontSize=13.sp,color=LabColors.textMuted)
+            }
+            Spacer(Modifier.height(16.dp))
             if(!allowed) {
                 Surface(shape=RoundedCornerShape(22.dp),color=LabColors.paper,
                     border=BorderStroke(1.dp,LabColors.line)) {

@@ -1,9 +1,15 @@
-# LedgerLens Source Scout
+# LedgerLens Source Scout v0.2
 
-Experimental Android source scanner. Reads all stored SMS rows after READ_SMS permission, groups received SMS by sender, creates *heuristic* financial-message structure signatures, and exports allowlisted JSON. No INTERNET permission; no raw SMS is saved or uploaded. Local source detail can display a few original sample messages.
+Separate experimental app that reads stored SMS rows with explicit \`READ_SMS\` permission.
 
-Export remains potentially identifying in rare cases: review before sharing.
+## Export options
 
-Build: gradle -p scout :app:assembleDebug
+- **Safe JSON** — previous version's source counts and generalized structural patterns.
+- **Full original SMS JSON** — unredacted content of **every SMS row**, including incoming, sent, draft and other SMS types, preserving exact body text, sender, provider SMS ID, timestamps, thread ID and message type. Save using Android's system file picker.
+- **Financial candidates JSON** — same full unredacted fields but restricted to received messages classified as likely financial; this heuristic may miss real transactions.
 
-Android 8.0+ (API 26+). This standalone mini app is separate from the existing LedgerLens app; it does not change its database or source logic. The debug APK is development-only, signed using GitHub Actions' ephemeral debug signing key.
+**No SMS are automatically uploaded or committed to GitHub.** This source repository contains program code only. Neither the app nor its build workflow receives any personal SMS data. No \`INTERNET\` permission. Export happens on the phone; the user explicitly selects a save location. These JSON files are unencrypted and can contain OTPs, private conversations and financial identifiers. Review the file before sharing, and delete unneeded copies. Export does not include RCS/MMS, which are outside the SMS provider.
+
+Building: \`gradle -p scout :app:assembleDebug\`
+
+Android 8.0+, debug build. v0.2 might need uninstalling v0.1 first due to independent debug signing keys. This is separate from the full LedgerLens financial app, which remains untouched.

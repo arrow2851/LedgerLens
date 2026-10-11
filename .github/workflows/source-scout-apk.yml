@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - build/source-scout-2026-10-11
+      - build/source-scout-raw-export-2026-10-11
   workflow_dispatch:
 jobs:
   apk:
@@ -33,6 +34,6 @@ jobs:
         run: gradle -p scout :app:assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
         with:
-          name: LedgerLens-Source-Scout-debug-apk
+          name: LedgerLens-Source-Scout-raw-export-apk
           path: scout/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error

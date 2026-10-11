@@ -68,7 +68,7 @@ private class SenderStats(val sender: String) {
 }
 private data class Scan(val all: Int, val inbox: Int, val finance: Int, val otp: Int, val senders: List<SenderStats>)
 
-private object MessageShape {
+internal object MessageShape {
     private val auth = Regex("""(?i)\b(?:otp|one[ -]?time[ -]?password|verification[ -]?code|security[ -]?code|login[ -]?code|passcode)\b""")
     private val finance = Regex("""(?i)\b(?:debited|credited|debit|credit|upi|imps|neft|rtgs|txn|transaction|spent|paid|payment|purchase|refund|reversal|withdrawal|deposit|balance|account|card|transfer|received|emi|loan)\b|₹""")
     private val tokens = Regex("""[\p{L}]+|\d+(?:[,.]\d+)*|[^\p{L}\p{N}\s]""")
@@ -169,6 +169,7 @@ class MainActivity : ComponentActivity() {
     private var scanning by mutableStateOf(false)
     private var scan by mutableStateOf<Scan?>(null)
     private var error by mutableStateOf<String?>(null)
+    private var rawExportScope by mutableStateOf(RawSmsExportScope.ALL_SMS)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -190,11 +191,35 @@ class MainActivity : ComponentActivity() {
                     } catch (e: Exception) { error = "Export failed: " + e.message }
                 }
             }
+            val saveRaw = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+                val scope = rawExportScope
+                if (uri != null) lifecycleScope.launch {
+                    try {
+                        if (!allowed) error = "SMS permission is required before exporting."
+                        else {
+                            val count = withContext(Dispatchers.IO) {
+                                val stream = contentResolver.openOutputStream(uri)
+                                    ?: throw IllegalStateException("Cannot open selected export file")
+                                stream.use { RawSmsExporter.write(applicationContext, it, scope) }
+                            }
+                            error = "$count original SMS messages exported locally. Review before sharing."
+                        }
+                    } catch (e: Exception) { error = "Raw export failed: " + e.message }
+                }
+            }
             MaterialTheme(colorScheme = darkColorScheme(primary = sage, onPrimary = pine, surface = panel, background = pine, onBackground = white)) {
                 ScoutUi(allowed, scanning, scan, error,
                     onPermission = { permission.launch(Manifest.permission.READ_SMS) },
                     onScan = { if (allowed) beginScan() else permission.launch(Manifest.permission.READ_SMS) },
-                    onExport = { save.launch("ledgerlens-source-report.json") })
+                    onExport = { save.launch("ledgerlens-source-report.json") },
+                    onRawExport = { scope ->
+                        rawExportScope = scope
+                        saveRaw.launch(
+                            if (scope == RawSmsExportScope.ALL_SMS)
+                                "ledgerlens-all-sms-raw.json"
+                            else "ledgerlens-financial-sms-raw.json"
+                        )
+                    })
             }
         }
     }
@@ -221,8 +246,30 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun ScoutUi(
     allowed: Boolean, scanning: Boolean, scan: Scan?, error: String?,
-    onPermission: () -> Unit, onScan: () -> Unit, onExport: () -> Unit
+    onPermission: () -> Unit, onScan: () -> Unit, onExport: () -> Unit,
+    onRawExport: (RawSmsExportScope) -> Unit
 ) {
+    var rawConfirmation by remember { mutableStateOf<RawSmsExportScope?>(null) }
+    if (rawConfirmation != null) {
+        AlertDialog(
+            onDismissRequest = { rawConfirmation = null },
+            title = { Text("Export original SMS messages?") },
+            text = { Text(if (rawConfirmation == RawSmsExportScope.ALL_SMS)
+                "This creates an unencrypted JSON file with every stored SMS, including personal conversations, codes, senders, dates and sent messages. It stays on your device until YOU share it. No automatic upload."
+                else "This creates an unencrypted JSON file containing original text and metadata for received messages flagged as financial. It may still contain sensitive information. Some transactions may be missed by the heuristic. No automatic upload."
+            ) },
+            confirmButton = {
+                Button(onClick = {
+                    val scope = rawConfirmation
+                    rawConfirmation = null
+                    if (scope != null) onRawExport(scope)
+                }) { Text("Export locally") }
+            },
+            dismissButton = {
+                TextButton(onClick = { rawConfirmation = null }) { Text("Cancel") }
+            }
+        )
+    }
     var selected by remember { mutableStateOf<String?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
     var financialOnly by rememberSaveable { mutableStateOf(true) }
@@ -289,7 +336,19 @@ private fun ScoutUi(
                 OutlinedButton(onClick = onScan, modifier = Modifier.weight(1f), enabled = !scanning) { Text("Rescan") }
                 Button(onClick = onExport, modifier = Modifier.weight(1.5f), enabled = !scanning) { Text("Export safe JSON") }
             }
-            Text("Export contains only source counts and generalized patterns; inspect before sharing.", color = muted, fontSize = 11.sp)
+            Text("Safe JSON is generalized. For parser training, export original SMS with complete metadata below.", color = muted, fontSize = 11.sp)
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = { rawConfirmation = RawSmsExportScope.ALL_SMS },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !scanning
+            ) { Text("Export ALL original SMS (JSON)") }
+            OutlinedButton(
+                onClick = { rawConfirmation = RawSmsExportScope.FINANCIAL_RECEIVED },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !scanning
+            ) { Text("Export likely financial SMS only") }
+            Text("Original texts are not sent to GitHub or anywhere by this app. The full export includes private messages and OTPs; it is not encrypted.", color = gold, fontSize = 11.sp)
             Spacer(Modifier.height(12.dp))
             OutlinedTextField(value = query, onValueChange = { query = it }, modifier = Modifier.fillMaxWidth(),
                 label = { Text("Search sender") }, singleLine = true)

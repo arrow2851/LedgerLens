@@ -236,7 +236,7 @@ private fun LabScreen(
                 ) {
                     Column(Modifier.fillMaxWidth().padding(14.dp)) {
                         Row(verticalAlignment=Alignment.CenterVertically) {
-                            Text(m?.merchant?.ifBlank { null } ?: p.merchant?.takeIf{it.isNotBlank()} ?: item.sender,
+                            Text(m?.merchant?.takeIf { it.isNotBlank() } ?: p.merchant?.takeIf{it.isNotBlank()} ?: item.sender,
                                 modifier=Modifier.weight(1f),fontWeight=FontWeight.SemiBold,color=textPrimary,
                                 maxLines=1,overflow=TextOverflow.Ellipsis)
                             Text(m?.amount?.takeIf{it.isNotBlank()} ?: moneyString(p.amountMinor).ifBlank { "—" },

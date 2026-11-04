@@ -49,6 +49,11 @@ internal fun SpendingScreen(
         monthTx.filter { impact(it, sources) != 0L }
     }
     val currentSpend = eligible.sumOf { impact(it, sources) }
+    val pending = monthTx.filter {
+        isApproved(it, sources) &&
+            it.kind in listOf(Movement.HOLD, Movement.SCHEDULED) && !it.excluded
+    }
+    val pendingAmount = pending.sumOf { it.amountMinor }
     val gross = eligible.filter { impact(it, sources) > 0 }.sumOf { impact(it, sources) }
     val returns = eligible.filter { impact(it, sources) < 0 }.sumOf { -impact(it, sources) }
     val categoryTotals = eligible
@@ -117,6 +122,16 @@ internal fun SpendingScreen(
                             fontWeight = FontWeight.Bold)
                     }
                 }
+            }
+        }
+        if (pending.isNotEmpty()) {
+            Panel(title = "Pending or unposted card activity",
+                supporting = "Not counted as spending until confirmed; includes card holds and scheduled payments") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(pending.size.toString() + " pending alerts", color = Muted)
+                    Text(money(pendingAmount, currency), fontWeight = FontWeight.Bold)
+                }
+                SmallLabel("Some issuers combine charge and authorization alerts. Confirm a final posting in Activity before including it as an expense.")
             }
         }
         if (reviewCount > 0) {

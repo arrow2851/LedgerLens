@@ -34,6 +34,7 @@ data class ParsedTransaction(
     val currency: String,
     val kind: String,
     val merchant: String?,
+    val accountHint: String?,
     val category: String?,
     val confidence: Double,
     val explanation: String,
@@ -151,12 +152,21 @@ object FinanceEngine {
         }
         return ParsedTransaction(
             amountMinor = minor, currency = currency, kind = treatment, merchant = merchant,
-            category = suggested?.name, confidence = confidence,
+            accountHint = extractAccountHint(body), category = suggested?.name, confidence = confidence,
             explanation = "Posted financial event. " +
                 (if (merchant == null) "Merchant unknown. " else "Merchant extracted. ") +
                 "Android SMS timestamp retained.", occurredAtMs = sms.receivedAtMs,
             receivedAtMs = sms.receivedAtMs
         )
+    }
+
+    fun extractAccountHint(body: String): String? {
+        val patterns = listOf(
+            Regex("""(?i)\b(?:credit|debit)\s+card.{0,50}?(?:\(|\*{2,}|x{2,}|…)\s*(\d{4})\b"""),
+            Regex("""(?i)\b(?:card|acct|a/c|account).{0,24}?(?:ending\s+in\s+|ending\s+|x{2,}|…|\()\s*(\d{4})\b"""),
+            Regex("""(?i)\bacct\s+(\d{4})\b""")
+        )
+        return patterns.firstNotNullOfOrNull { it.find(body)?.groupValues?.getOrNull(1) }
     }
 
     fun extractMerchant(body: String): String? {

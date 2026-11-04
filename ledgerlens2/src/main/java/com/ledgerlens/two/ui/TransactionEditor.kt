@@ -13,6 +13,11 @@ import com.ledgerlens.two.data.EditRequest
 import com.ledgerlens.two.data.FinancialSource
 import com.ledgerlens.two.data.LedgerTransaction
 import com.ledgerlens.two.domain.Movement
+import java.math.BigDecimal
+import java.math.RoundingMode
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 private val treatments = listOf(
     Movement.EXPENSE to "Expense",
@@ -30,6 +35,7 @@ private val treatments = listOf(
 internal fun TransactionEditor(
     transaction: LedgerTransaction,
     sources: List<FinancialSource>,
+    evidence: String?,
     onDismiss: () -> Unit,
     onSave: (EditRequest) -> Unit,
     onSaveMerchantRule: (String, String) -> Unit,
@@ -40,6 +46,14 @@ internal fun TransactionEditor(
     var kind by remember(transaction.id) { mutableStateOf(transaction.kind) }
     var excluded by remember(transaction.id) { mutableStateOf(transaction.excluded) }
     var showKinds by remember { mutableStateOf(false) }
+    var amountText by remember(transaction.id) {
+        mutableStateOf("%.2f".format(Locale.US, transaction.amountMinor / 100.0))
+    }
+    var dateText by remember(transaction.id) {
+        mutableStateOf(SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(transaction.occurredAtMs)))
+    }
+    var validationError by remember { mutableStateOf("") }
+    var showOriginal by remember { mutableStateOf(false) }
     val canAffectSpending = kind in listOf(
         Movement.EXPENSE, Movement.REFUND, Movement.REIMBURSEMENT
     )
@@ -67,6 +81,27 @@ internal fun TransactionEditor(
                 SmallLabel("Recognition confidence: " +
                     (transaction.confidence * 100).toInt().toString() + "%")
                 SmallLabel(transaction.reason)
+                OutlinedTextField(
+                    value = amountText, onValueChange = { amountText = it },
+                    label = { Text("Amount (" + transaction.currency + ")") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = dateText, onValueChange = { dateText = it },
+                    label = { Text("Transaction date/time (yyyy-MM-dd HH:mm)") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+                SmallLabel("Corrections are recorded in the local audit trail; the original SMS remains unchanged.")
+                TextButton(onClick = { showOriginal = !showOriginal }) {
+                    Text(if (showOriginal) "Hide original SMS evidence" else "Show original SMS evidence")
+                }
+                if (showOriginal) {
+                    Text(evidence ?: "Message loading or unavailable",
+                        style = MaterialTheme.typography.bodySmall)
+                }
+                if (validationError.isNotBlank()) {
+                    Text(validationError, color = Coral, style = MaterialTheme.typography.labelSmall)
+                }
                 OutlinedTextField(
                     value = merchant, onValueChange = { merchant = it },
                     label = { Text("Merchant or payee") }, singleLine = true,
@@ -134,11 +169,26 @@ internal fun TransactionEditor(
         },
         confirmButton = {
             Button(onClick = {
-                onSave(EditRequest(
-                    merchant = merchant.trim().ifBlank { null },
-                    category = category.trim().ifBlank { null },
-                    kind = kind, excluded = excluded
-                ))
+                val minor = runCatching {
+                    BigDecimal(amountText.trim()).multiply(BigDecimal(100))
+                        .setScale(0, RoundingMode.UNNECESSARY).longValueExact()
+                }.getOrNull()
+                val correctedTime = runCatching {
+                    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).apply {
+                        isLenient = false
+                    }.parse(dateText.trim())?.time
+                }.getOrNull()
+                if (minor == null || minor <= 0L || correctedTime == null) {
+                    validationError = "Enter a valid positive amount and a valid date/time."
+                } else {
+                    validationError = ""
+                    onSave(EditRequest(
+                        merchant = merchant.trim().ifBlank { null },
+                        category = category.trim().ifBlank { null },
+                        kind = kind, excluded = excluded,
+                        amountMinor = minor, occurredAtMs = correctedTime
+                    ))
+                }
             }) { Text("Save correction") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }

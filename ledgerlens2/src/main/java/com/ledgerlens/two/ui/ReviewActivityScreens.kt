@@ -34,12 +34,12 @@ internal fun TransactionRow(
         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier.size(44.dp).background(
-                    if (t.kind == Movement.EXPENSE) Color(0xFFE0F4E9)
+                    if (t.kind in listOf(Movement.EXPENSE, Movement.HOLD)) Color(0xFFE0F4E9)
                     else Color(0xFFEAE8FC), RoundedCornerShape(13.dp)
                 ), contentAlignment = Alignment.Center
             ) {
                 Text((t.merchant?.firstOrNull() ?: '?').uppercaseChar().toString(),
-                    color = if (t.kind == Movement.EXPENSE) Pine else Violet,
+                    color = if (t.kind in listOf(Movement.EXPENSE, Movement.HOLD)) Pine else Violet,
                     fontWeight = FontWeight.ExtraBold)
             }
             Spacer(Modifier.width(12.dp))
@@ -49,7 +49,7 @@ internal fun TransactionRow(
                     Movement.CARD_PAYMENT -> "Card payment"
                     Movement.TRANSFER -> "Transfer"
                     Movement.P2P_REVIEW -> "Payment to classify"
-                    Movement.HOLD -> "Pending card hold"
+                    Movement.HOLD -> "Card charge/hold"
                     Movement.SCHEDULED -> "Scheduled payment"
                     else -> "Merchant to confirm"
                 },
@@ -168,20 +168,20 @@ internal fun ActivityScreen(
     var search by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf("All") }
     var allMonths by remember { mutableStateOf(false) }
-    val options = listOf("All", "Expenses", "Income", "Transfers", "Refunds", "Pending", "Review")
+    val options = listOf("All", "Expenses", "Income", "Transfers", "Refunds", "Scheduled", "Review")
     val filtered = remember(transactions, sources, month, currency, allMonths, search, filter) {
         transactions.filter { t ->
             t.currency == currency && (allMonths || monthOf(t) == month) &&
                 (search.isBlank() || listOfNotNull(t.merchant, t.category, t.kind, t.sender, t.accountHint)
                     .any { it.contains(search.trim(), ignoreCase = true) }) &&
                 when (filter) {
-                    "Expenses" -> t.kind == Movement.EXPENSE
+                    "Expenses" -> t.kind in listOf(Movement.EXPENSE, Movement.HOLD)
                     "Income" -> t.kind == Movement.INCOME
                     "Transfers" -> t.kind in listOf(
                         Movement.TRANSFER, Movement.P2P_REVIEW, Movement.CARD_PAYMENT
                     )
                     "Refunds" -> t.kind in listOf(Movement.REFUND, Movement.REIMBURSEMENT)
-                    "Pending" -> t.kind in listOf(Movement.HOLD, Movement.SCHEDULED)
+                    "Scheduled" -> t.kind == Movement.SCHEDULED
                     "Review" -> issues(t, sources).isNotEmpty()
                     else -> true
                 }

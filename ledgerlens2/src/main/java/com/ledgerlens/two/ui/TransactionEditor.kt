@@ -21,7 +21,9 @@ private val treatments = listOf(
     Movement.REIMBURSEMENT to "Reimbursement",
     Movement.CARD_PAYMENT to "Credit-card payment",
     Movement.TRANSFER to "Internal transfer",
-    Movement.P2P_REVIEW to "Unresolved person-to-person payment"
+    Movement.P2P_REVIEW to "Unresolved person-to-person payment",
+    Movement.HOLD to "Unsettled card authorization",
+    Movement.SCHEDULED to "Scheduled future payment"
 )
 
 @Composable

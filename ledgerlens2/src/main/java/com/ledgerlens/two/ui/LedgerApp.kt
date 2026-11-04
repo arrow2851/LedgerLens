@@ -239,6 +239,7 @@ fun LedgerApp(
                         budgets = budgets, month = month, currency = currency,
                         onSource = model::approveSource,
                         onRuleToggle = model::setRuleEnabled,
+                        onMerchantRule = model::saveMerchantDefault,
                         onBudget = model::saveBudget,
                         onImport = onImport, onScan = onScan,
                         onExportCsv = onExportCsv, onExportBackup = onExportBackup,

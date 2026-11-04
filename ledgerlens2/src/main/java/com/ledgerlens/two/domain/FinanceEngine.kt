@@ -140,7 +140,7 @@ object FinanceEngine {
             else -> Movement.P2P_REVIEW
         }
         val merchant = extractMerchant(body)
-        val suggested = if (treatment == Movement.EXPENSE || treatment == Movement.REFUND)
+        val suggested = if (treatment in listOf(Movement.EXPENSE, Movement.HOLD, Movement.REFUND))
             merchant?.let(::suggestCategory) else null
         val confidence = when {
             treatment == Movement.P2P_REVIEW -> .54
@@ -153,7 +153,7 @@ object FinanceEngine {
         return ParsedTransaction(
             amountMinor = minor, currency = currency, kind = treatment, merchant = merchant,
             accountHint = extractAccountHint(body), category = suggested?.name, confidence = confidence,
-            explanation = "Posted financial event. " +
+            explanation = (if (treatment == Movement.HOLD) "Charge-or-hold alert included as spending. " else "Financial event recognized. ") +
                 (if (merchant == null) "Merchant unknown. " else "Merchant extracted. ") +
                 "Android SMS timestamp retained.", occurredAtMs = sms.receivedAtMs,
             receivedAtMs = sms.receivedAtMs
@@ -205,7 +205,7 @@ object FinanceEngine {
     fun impact(kind: String, minor: Long, excluded: Boolean, sourceApproved: Boolean): Long {
         if (!sourceApproved || excluded) return 0L
         return when (kind) {
-            Movement.EXPENSE -> minor
+            Movement.EXPENSE, Movement.HOLD -> minor
             Movement.REFUND, Movement.REIMBURSEMENT -> -minor
             else -> 0L
         }

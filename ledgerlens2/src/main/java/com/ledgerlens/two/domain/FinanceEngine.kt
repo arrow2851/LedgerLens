@@ -211,9 +211,13 @@ object FinanceEngine {
         }
     }
 
+    fun matchingKindForDuplicate(kind: String): String =
+        if (kind == Movement.HOLD) Movement.EXPENSE else kind
+
     fun duplicateCandidate(a: ParsedTransaction, b: ParsedTransaction, sameSource: Boolean): Boolean =
         sameSource && a.currency == b.currency && a.amountMinor == b.amountMinor &&
-            a.kind == b.kind && abs(a.occurredAtMs - b.occurredAtMs) <= 300_000L &&
+            matchingKindForDuplicate(a.kind) == matchingKindForDuplicate(b.kind) &&
+            abs(a.occurredAtMs - b.occurredAtMs) <= 300_000L &&
             (a.merchant == null || b.merchant == null ||
                 canonicalMerchant(a.merchant) == canonicalMerchant(b.merchant))
 

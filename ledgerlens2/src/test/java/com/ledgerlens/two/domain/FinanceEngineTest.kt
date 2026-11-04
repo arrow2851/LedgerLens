@@ -93,12 +93,12 @@ class FinanceEngineTest {
             assertEquals(0L, FinanceEngine.impact(it, 4200L, false, true))
         }
     }
-    @Test fun capitalOneChargeOrHoldMustNotBeCountedAsSpending() {
+    @Test fun capitalOneChargeOrHoldCountsAsSpending() {
         val t = FinanceEngine.parse(sms(
             "Capital One: A chrge or hold for $89.35 on Nov 1, 2026 was placed on your Venture Credit Card (7973) at GROCERY STORE. Std carrier charges apply."
         ))!!
         assertEquals(Movement.HOLD, t.kind)
-        assertEquals(0L, FinanceEngine.impact(t.kind, t.amountMinor, false, true))
+        assertEquals(8_935L, FinanceEngine.impact(t.kind, t.amountMinor, false, true))
     }
 
     @Test fun chaseExternalTransferIsAccountMovementNotPurchase() {

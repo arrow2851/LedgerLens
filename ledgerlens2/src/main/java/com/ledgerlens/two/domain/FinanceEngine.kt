@@ -160,6 +160,8 @@ object FinanceEngine {
     }
 
     fun extractMerchant(body: String): String? {
+        val zelleSender = Regex("""(?i)\bZelle(?:\(R\))?\s*:\s*[- ]*([A-Za-z][A-Za-z .\'-]{2,70}?)\s+sent you\b""").find(body)
+        if (zelleSender != null) return zelleSender.groupValues[1].trim()
         for (match in merchantPattern.findAll(body)) {
             val cleaned = match.groupValues[1]
                 .split(Regex("""(?i)\s+(?:on|dated|ref(?:erence)?|available|via|for\s+card|with\s+card|bal)\b"""))[0]

@@ -155,4 +155,13 @@ class FinanceEngineTest {
         ))
     }
 
+    @Test fun holdAndPostedAlertsCanMatchAsDuplicateCandidates() {
+        val hold = FinanceEngine.parse(sms("Capital One: A charge or hold for $24.99 at Walmart", 11L, 1_800_000_000_000L))!!
+        val posted = FinanceEngine.parse(sms("Spent $24.99 at Walmart", 12L, 1_800_000_025_000L))!!
+        assertEquals(Movement.HOLD, hold.kind)
+        assertEquals(Movement.EXPENSE, posted.kind)
+        assertTrue(FinanceEngine.duplicateCandidate(hold, posted, true))
+        assertFalse(FinanceEngine.duplicateCandidate(hold, posted, false))
+    }
+
 }

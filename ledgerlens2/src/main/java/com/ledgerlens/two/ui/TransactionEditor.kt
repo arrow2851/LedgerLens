@@ -27,7 +27,7 @@ private val treatments = listOf(
     Movement.CARD_PAYMENT to "Credit-card payment",
     Movement.TRANSFER to "Internal transfer",
     Movement.P2P_REVIEW to "Unresolved person-to-person payment",
-    Movement.HOLD to "Unsettled card authorization",
+    Movement.HOLD to "Charge or hold (counts as expense)",
     Movement.SCHEDULED to "Scheduled future payment"
 )
 
@@ -56,7 +56,7 @@ internal fun TransactionEditor(
     var validationError by remember { mutableStateOf("") }
     var showOriginal by remember { mutableStateOf(false) }
     val canAffectSpending = kind in listOf(
-        Movement.EXPENSE, Movement.REFUND, Movement.REIMBURSEMENT
+        Movement.EXPENSE, Movement.HOLD, Movement.REFUND, Movement.REIMBURSEMENT
     )
     AlertDialog(
         onDismissRequest = onDismiss,

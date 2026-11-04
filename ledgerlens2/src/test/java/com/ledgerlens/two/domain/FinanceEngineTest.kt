@@ -140,4 +140,10 @@ class FinanceEngineTest {
         assertEquals(Movement.SCHEDULED, t.kind)
     }
 
+    @Test fun couponWithPurchaseWordingIsNotPostedSpending() {
+        assertNull(FinanceEngine.parse(sms(
+            "You get $10 off a purchase of $100 or more at a market on your next visit. Reply YES to save."
+        )))
+    }
+
 }

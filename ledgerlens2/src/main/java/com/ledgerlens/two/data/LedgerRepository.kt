@@ -34,7 +34,8 @@ class LedgerRepository(private val db: LedgerDatabase) {
     suspend fun edit(id: Long, request: EditRequest) = withContext(Dispatchers.IO) {
         require(request.kind in listOf(
             Movement.EXPENSE, Movement.INCOME, Movement.REFUND, Movement.REIMBURSEMENT,
-            Movement.CARD_PAYMENT, Movement.TRANSFER, Movement.P2P_REVIEW
+            Movement.CARD_PAYMENT, Movement.TRANSFER, Movement.P2P_REVIEW,
+            Movement.HOLD, Movement.SCHEDULED
         )) { "Unknown financial treatment" }
         val merchant = request.merchant?.trim()?.ifBlank { null }
         val category = request.category?.trim()?.ifBlank { null }
@@ -153,7 +154,7 @@ class LedgerRepository(private val db: LedgerDatabase) {
             return item
         }
         fun arrayOfObjects(values: List<JSONObject>): JSONArray =
-            JSONArray().also { arr -> values.forEach(arr::put) }
+            JSONArray().also { arr -> values.forEach { obj -> arr.put(obj) } }
         JSONObject().apply {
             put("format", "LedgerLens2")
             put("schema_version", 1)
@@ -223,7 +224,8 @@ class LedgerRepository(private val db: LedgerDatabase) {
         ) }
         val smsIds = sms.map { it.smsId }.toSet()
         val kinds = setOf(Movement.EXPENSE, Movement.INCOME, Movement.REFUND,
-            Movement.REIMBURSEMENT, Movement.CARD_PAYMENT, Movement.TRANSFER, Movement.P2P_REVIEW)
+            Movement.REIMBURSEMENT, Movement.CARD_PAYMENT, Movement.TRANSFER, Movement.P2P_REVIEW,
+            Movement.HOLD, Movement.SCHEDULED)
         val tx = objects("transactions").map { t ->
             val amount = t.getLong("amountMinor")
             val treatment = t.getString("kind")

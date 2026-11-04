@@ -52,7 +52,7 @@ object FinanceEngine {
         """(?i)\b(otp|one[\s-]?time (?:password|code)|verification code|security code|sign[\s-]?in code|passcode|code to (?:approve|authorize)|authorization code)\b"""
     )
     private val advertising = Regex(
-        """(?i)\b(discount|offer|cashback offer|save up to|shop now|apply now|pre-qualify|limited time|promotion|eligible for|special deal|refer a friend)\b"""
+        """(?i)\b(discount|offers?|cashback offer|save(?: up to)?|you (?:can )?get|shop now|apply now|pre-qualify|limited time|promotion|eligible for|special deal|refer a friend|next visit|next purchase|use code)\b"""
     )
     private val notPosted = Regex(
         """(?i)\b(declined|failed|unsuccessful|was rejected|could not be processed|pending approval|low balance|fraud alert|possible unauthori[sz]ed|was blocked|attempted)\b"""

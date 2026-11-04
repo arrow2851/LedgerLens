@@ -140,7 +140,7 @@ class SmsIngestor(private val database: LedgerDatabase) {
                 ))
                 val t = LedgerTransaction(
                     smsId = sms.smsId, sourceKey = sms.sender, sender = sms.sender,
-                    amountMinor = decision.amountMinor, currency = decision.currency,
+                    accountHint = decision.accountHint, amountMinor = decision.amountMinor, currency = decision.currency,
                     kind = decision.kind, merchant = decision.merchant,
                     merchantKey = key, category = savedCategory ?: decision.category,
                     confidence = decision.confidence,

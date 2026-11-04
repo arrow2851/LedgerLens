@@ -56,7 +56,7 @@ internal fun impact(t: LedgerTransaction, sources: List<FinancialSource>): Long 
 internal fun issues(t: LedgerTransaction, sources: List<FinancialSource>): List<String> = buildList {
     if (!isApproved(t, sources)) add("Source approval")
     if (t.kind == Movement.P2P_REVIEW) add("Payment type")
-    if (t.kind in listOf(Movement.EXPENSE, Movement.REFUND, Movement.REIMBURSEMENT) && t.merchant.isNullOrBlank()) add("Merchant")
+    if (t.kind in listOf(Movement.EXPENSE, Movement.HOLD, Movement.REFUND, Movement.REIMBURSEMENT) && t.merchant.isNullOrBlank()) add("Merchant")
     if (t.kind in listOf(Movement.EXPENSE, Movement.REFUND, Movement.REIMBURSEMENT) && t.category.isNullOrBlank()) add("Category")
     if (t.duplicateOfId != null && !t.duplicateDismissed && !t.excluded) add("Possible duplicate")
     if (t.confidence < .70 && !t.verified) add("Low confidence")

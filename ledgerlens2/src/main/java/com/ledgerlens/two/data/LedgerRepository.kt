@@ -14,6 +14,7 @@ import java.util.Locale
 
 data class EditRequest(
     val merchant: String?,
+    val accountHint: String?,
     val category: String?,
     val kind: String,
     val excluded: Boolean,
@@ -59,7 +60,8 @@ class LedgerRepository(private val db: LedgerDatabase) {
             }
             val changed = previous.copy(
                 amountMinor = request.amountMinor, occurredAtMs = request.occurredAtMs,
-                merchant = merchant, merchantKey = merchant?.let(FinanceEngine::canonicalMerchant).orEmpty(),
+                merchant = merchant, accountHint = request.accountHint?.trim()?.ifBlank { null },
+                merchantKey = merchant?.let(FinanceEngine::canonicalMerchant).orEmpty(),
                 category = category, kind = newKind, excluded = excluded,
                 verified = true, merchantUserEdited = previous.merchantUserEdited ||
                     merchant != previous.merchant,
@@ -153,6 +155,7 @@ class LedgerRepository(private val db: LedgerDatabase) {
         put("amountMinor", t.amountMinor)
         put("currency", t.currency)
         put("occurredAtMs", t.occurredAtMs)
+        put("accountHint", t.accountHint ?: JSONObject.NULL)
         put("merchant", t.merchant ?: JSONObject.NULL)
         put("category", t.category ?: JSONObject.NULL)
         put("kind", t.kind)
@@ -164,7 +167,7 @@ class LedgerRepository(private val db: LedgerDatabase) {
 
     /** Spreadsheet-safe CSV export: each field is quoted; formula-like text is neutralized. */
     suspend fun exportCsv(): String = withContext(Dispatchers.IO) {
-        val header = listOf("id", "sms_id", "date_utc", "sender", "merchant", "category",
+        val header = listOf("id", "sms_id", "date_utc", "sender", "account_hint", "merchant", "category",
             "treatment", "amount_minor", "currency", "source_approved",
             "excluded", "verified", "duplicate_of", "confidence", "reason")
         val sourceMap = db.dao().allSources().associateBy { it.sender }
@@ -182,7 +185,7 @@ class LedgerRepository(private val db: LedgerDatabase) {
             db.dao().allTransactions().forEach { t ->
                 val fields = listOf(
                     t.id.toString(), t.smsId.toString(), formatter.format(Date(t.occurredAtMs)),
-                    t.sender, t.merchant.orEmpty(), t.category.orEmpty(), t.kind,
+                    t.sender, t.accountHint.orEmpty(), t.merchant.orEmpty(), t.category.orEmpty(), t.kind,
                     t.amountMinor.toString(), t.currency,
                     (sourceMap[t.sourceKey]?.approved == true).toString(), t.excluded.toString(),
                     t.verified.toString(), t.duplicateOfId?.toString().orEmpty(),
@@ -218,7 +221,8 @@ class LedgerRepository(private val db: LedgerDatabase) {
             ) }))
             put("transactions", arrayOfObjects(dao.allTransactions().map { t -> objectOf(
                 "id" to t.id, "smsId" to t.smsId, "sourceKey" to t.sourceKey,
-                "sender" to t.sender, "amountMinor" to t.amountMinor,
+                "sender" to t.sender, "accountHint" to t.accountHint,
+                "amountMinor" to t.amountMinor,
                 "currency" to t.currency, "kind" to t.kind, "merchant" to t.merchant,
                 "merchantKey" to t.merchantKey, "category" to t.category,
                 "confidence" to t.confidence, "reason" to t.reason,
@@ -289,7 +293,8 @@ class LedgerRepository(private val db: LedgerDatabase) {
             }
             LedgerTransaction(
                 id = t.getLong("id"), smsId = smsId, sourceKey = key,
-                sender = t.getString("sender"), amountMinor = amount,
+                sender = t.getString("sender"), accountHint = t.nullable("accountHint"),
+                amountMinor = amount,
                 currency = t.getString("currency"), kind = treatment,
                 merchant = t.nullable("merchant"), merchantKey = t.getString("merchantKey"),
                 category = t.nullable("category"), confidence = t.getDouble("confidence"),

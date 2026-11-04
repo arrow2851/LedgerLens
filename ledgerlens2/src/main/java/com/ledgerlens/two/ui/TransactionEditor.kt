@@ -42,6 +42,7 @@ internal fun TransactionEditor(
     onDuplicate: (Boolean) -> Unit
 ) {
     var merchant by remember(transaction.id) { mutableStateOf(transaction.merchant.orEmpty()) }
+    var accountHint by remember(transaction.id) { mutableStateOf(transaction.accountHint.orEmpty()) }
     var category by remember(transaction.id) { mutableStateOf(transaction.category.orEmpty()) }
     var kind by remember(transaction.id) { mutableStateOf(transaction.kind) }
     var excluded by remember(transaction.id) { mutableStateOf(transaction.excluded) }
@@ -78,6 +79,11 @@ internal fun TransactionEditor(
                         color = Amber, style = MaterialTheme.typography.labelMedium)
                 }
                 SmallLabel("SMS sender: " + transaction.sender)
+                OutlinedTextField(
+                    value = accountHint, onValueChange = { accountHint = it },
+                    label = { Text("Account/card last 4 digits (optional)") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
                 SmallLabel("Recognition confidence: " +
                     (transaction.confidence * 100).toInt().toString() + "%")
                 SmallLabel(transaction.reason)
@@ -184,6 +190,7 @@ internal fun TransactionEditor(
                     validationError = ""
                     onSave(EditRequest(
                         merchant = merchant.trim().ifBlank { null },
+                        accountHint = accountHint.trim().ifBlank { null },
                         category = category.trim().ifBlank { null },
                         kind = kind, excluded = excluded,
                         amountMinor = minor, occurredAtMs = correctedTime

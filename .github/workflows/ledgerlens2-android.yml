@@ -4,6 +4,9 @@ on:
     branches:
       - feat/LedgerLens2
   workflow_dispatch:
+concurrency:
+  group: ledgerlens2-build-branch
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:

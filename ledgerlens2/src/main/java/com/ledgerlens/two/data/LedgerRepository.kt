@@ -16,7 +16,9 @@ data class EditRequest(
     val merchant: String?,
     val category: String?,
     val kind: String,
-    val excluded: Boolean
+    val excluded: Boolean,
+    val amountMinor: Long,
+    val occurredAtMs: Long
 )
 
 class LedgerRepository(private val db: LedgerDatabase) {
@@ -37,6 +39,9 @@ class LedgerRepository(private val db: LedgerDatabase) {
             Movement.CARD_PAYMENT, Movement.TRANSFER, Movement.P2P_REVIEW,
             Movement.HOLD, Movement.SCHEDULED
         )) { "Unknown financial treatment" }
+        require(request.amountMinor > 0L && request.amountMinor < 100_000_000_000L)
+        require(request.occurredAtMs >= 946684800000L &&
+            request.occurredAtMs <= System.currentTimeMillis() + 172800000L)
         val merchant = request.merchant?.trim()?.ifBlank { null }
         val category = request.category?.trim()?.ifBlank { null }
         val dao = db.dao()
@@ -48,7 +53,8 @@ class LedgerRepository(private val db: LedgerDatabase) {
                 Movement.EXPENSE, Movement.REFUND, Movement.REIMBURSEMENT -> request.excluded
                 else -> true
             }
-            dao.updateTransaction(previous.copy(
+            val changed = previous.copy(
+                amountMinor = request.amountMinor, occurredAtMs = request.occurredAtMs,
                 merchant = merchant, merchantKey = merchant?.let(FinanceEngine::canonicalMerchant).orEmpty(),
                 category = category, kind = newKind, excluded = excluded,
                 verified = true, merchantUserEdited = previous.merchantUserEdited ||
@@ -56,17 +62,33 @@ class LedgerRepository(private val db: LedgerDatabase) {
                 categoryUserEdited = previous.categoryUserEdited || category != previous.category,
                 kindUserEdited = previous.kindUserEdited || newKind != previous.kind,
                 updatedAtMs = System.currentTimeMillis()
-            ))
+            )
+            if (changed != previous) {
+                dao.updateTransaction(changed)
+                dao.insertAudit(TransactionAudit(
+                    transactionId = previous.id, operation = "USER_CORRECTION",
+                    beforeJson = auditSnapshot(previous), afterJson = auditSnapshot(changed),
+                    editedAtMs = System.currentTimeMillis()
+                ))
+            }
         }
     }
 
     suspend fun duplicateDecision(id: Long, isDuplicate: Boolean) = withContext(Dispatchers.IO) {
         val current = db.dao().transactionById(id) ?: return@withContext
-        db.dao().updateTransaction(current.copy(
-            duplicateDismissed = !isDuplicate,
-            excluded = if (isDuplicate) true else current.excluded,
-            verified = true, updatedAtMs = System.currentTimeMillis()
-        ))
+        db.withTransaction {
+            val changed = current.copy(
+                duplicateDismissed = !isDuplicate,
+                excluded = if (isDuplicate) true else current.excluded,
+                verified = true, updatedAtMs = System.currentTimeMillis()
+            )
+            db.dao().updateTransaction(changed)
+            db.dao().insertAudit(TransactionAudit(
+                transactionId = id, operation = "DUPLICATE_DECISION",
+                beforeJson = auditSnapshot(current), afterJson = auditSnapshot(changed),
+                editedAtMs = System.currentTimeMillis()
+            ))
+        }
     }
 
     /** One explicit merchant decision updates unedited history and future imports. */
@@ -81,7 +103,15 @@ class LedgerRepository(private val db: LedgerDatabase) {
                 category = category, active = true, updatedAtMs = now
             ))
             db.dao().transactionsForMerchant(key).filter { !it.categoryUserEdited }.forEach {
-                db.dao().updateTransaction(it.copy(category = category, updatedAtMs = now))
+                val changed = it.copy(category = category, updatedAtMs = now)
+                if (changed.category != it.category) {
+                    db.dao().updateTransaction(changed)
+                    db.dao().insertAudit(TransactionAudit(
+                        transactionId = it.id, operation = "MERCHANT_DEFAULT",
+                        beforeJson = auditSnapshot(it), afterJson = auditSnapshot(changed),
+                        editedAtMs = now
+                    ))
+                }
             }
         }
     }
@@ -111,8 +141,22 @@ class LedgerRepository(private val db: LedgerDatabase) {
             db.dao().clearSources()
             db.dao().clearRules()
             db.dao().clearBudgets()
+            db.dao().clearAudit()
         }
     }
+
+    private fun auditSnapshot(t: LedgerTransaction): String = JSONObject().apply {
+        put("amountMinor", t.amountMinor)
+        put("currency", t.currency)
+        put("occurredAtMs", t.occurredAtMs)
+        put("merchant", t.merchant ?: JSONObject.NULL)
+        put("category", t.category ?: JSONObject.NULL)
+        put("kind", t.kind)
+        put("excluded", t.excluded)
+        put("verified", t.verified)
+        put("duplicateOfId", t.duplicateOfId ?: JSONObject.NULL)
+        put("duplicateDismissed", t.duplicateDismissed)
+    }.toString()
 
     /** Spreadsheet-safe CSV export: each field is quoted; formula-like text is neutralized. */
     suspend fun exportCsv(): String = withContext(Dispatchers.IO) {
@@ -191,6 +235,11 @@ class LedgerRepository(private val db: LedgerDatabase) {
                 "currency" to b.currency, "limitMinor" to b.limitMinor,
                 "updatedAtMs" to b.updatedAtMs
             ) }))
+            put("audit", arrayOfObjects(dao.allAudit().map { e -> objectOf(
+                "id" to e.id, "transactionId" to e.transactionId,
+                "operation" to e.operation, "beforeJson" to e.beforeJson,
+                "afterJson" to e.afterJson, "editedAtMs" to e.editedAtMs
+            ) }))
         }.toString(2)
     }
 
@@ -263,15 +312,23 @@ class LedgerRepository(private val db: LedgerDatabase) {
             category = b.getString("category"), currency = b.getString("currency"),
             limitMinor = b.getLong("limitMinor"), updatedAtMs = b.getLong("updatedAtMs")
         ) }
+        val audit = objects("audit").map { e -> TransactionAudit(
+            id = e.getLong("id"), transactionId = e.getLong("transactionId"),
+            operation = e.getString("operation"), beforeJson = e.getString("beforeJson"),
+            afterJson = e.getString("afterJson"), editedAtMs = e.getLong("editedAtMs")
+        ) }
+        val transactionIds = tx.map { it.id }.toSet()
+        require(audit.all { it.transactionId in transactionIds })
         db.withTransaction {
             val dao = db.dao()
-            dao.clearTransactions(); dao.clearSms(); dao.clearSources()
+            dao.clearAudit(); dao.clearTransactions(); dao.clearSms(); dao.clearSources()
             dao.clearRules(); dao.clearBudgets()
             for (s in sources) dao.insertSource(s)
             for (s in sms) dao.insertSms(s)
             for (t in tx) require(dao.insertTransaction(t) > 0L) { "Duplicate transaction ID" }
             for (r in rules) dao.saveRule(r)
             for (b in budgets) dao.saveBudget(b)
+            for (e in audit) dao.insertAudit(e)
         }
         tx.size
     }

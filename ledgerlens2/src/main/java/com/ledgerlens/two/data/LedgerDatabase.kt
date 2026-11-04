@@ -36,6 +36,7 @@ data class LedgerTransaction(
     val smsId: Long,
     val sourceKey: String,
     val sender: String,
+    val accountHint: String? = null,
     val amountMinor: Long,
     val currency: String,
     val kind: String,

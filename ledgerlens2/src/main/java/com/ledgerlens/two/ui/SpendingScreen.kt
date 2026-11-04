@@ -49,11 +49,6 @@ internal fun SpendingScreen(
         monthTx.filter { impact(it, sources) != 0L }
     }
     val currentSpend = eligible.sumOf { impact(it, sources) }
-    val pending = monthTx.filter {
-        isApproved(it, sources) &&
-            it.kind in listOf(Movement.HOLD, Movement.SCHEDULED) && !it.excluded
-    }
-    val pendingAmount = pending.sumOf { it.amountMinor }
     val gross = eligible.filter { impact(it, sources) > 0 }.sumOf { impact(it, sources) }
     val returns = eligible.filter { impact(it, sources) < 0 }.sumOf { -impact(it, sources) }
     val categoryTotals = eligible
@@ -84,7 +79,7 @@ internal fun SpendingScreen(
     val reviewCount = monthTx.count { issues(it, sources).isNotEmpty() }
     val recurring = remember(transactions, sources, currency) {
         FinanceEngine.recurring(transactions.filter {
-            it.currency == currency && it.kind == Movement.EXPENSE && impact(it, sources) > 0
+            it.currency == currency && it.kind in listOf(Movement.EXPENSE, Movement.HOLD) && impact(it, sources) > 0
         }.mapNotNull { t ->
             t.merchant?.let { Triple(it, t.amountMinor, t.occurredAtMs) }
         })
@@ -124,16 +119,6 @@ internal fun SpendingScreen(
                 }
             }
         }
-        if (pending.isNotEmpty()) {
-            Panel(title = "Pending or unposted card activity",
-                supporting = "Not counted as spending until confirmed; includes card holds and scheduled payments") {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(pending.size.toString() + " pending alerts", color = Muted)
-                    Text(money(pendingAmount, currency), fontWeight = FontWeight.Bold)
-                }
-                SmallLabel("Some issuers combine charge and authorization alerts. Confirm a final posting in Activity before including it as an expense.")
-            }
-        }
         if (reviewCount > 0) {
             Surface(onClick = onReview, shape = RoundedCornerShape(18.dp),
                 color = Color(0xFFFFF4E8)) {
@@ -150,10 +135,10 @@ internal fun SpendingScreen(
             }
         }
         Panel(title = "Spending by category",
-            supporting = "Only confirmed expense treatments from approved SMS sources") {
+            supporting = "Charges and charge-or-hold alerts from approved SMS sources") {
             val chartValues = categoryTotals.filter { it.value > 0L }
             if (chartValues.isEmpty()) {
-                SmallLabel("No confirmed spending for this month and currency yet.")
+                SmallLabel("No expense or charge-or-hold alerts from approved sources for this month.")
             } else {
                 val total = chartValues.sumOf { it.value }.toFloat().coerceAtLeast(1f)
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {

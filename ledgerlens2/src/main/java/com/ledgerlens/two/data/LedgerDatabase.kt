@@ -73,6 +73,17 @@ data class MerchantRule(
     val updatedAtMs: Long
 )
 
+/** Immutable local history of important user edits and automated rule changes. */
+@Entity(tableName = "audit_events", indices = [Index(value = ["transactionId"])])
+data class TransactionAudit(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val transactionId: Long,
+    val operation: String,
+    val beforeJson: String,
+    val afterJson: String,
+    val editedAtMs: Long
+)
+
 @Entity(tableName = "budgets")
 data class MonthlyBudget(
     @PrimaryKey val key: String,
@@ -96,6 +107,12 @@ interface LedgerDao {
 
     @Query("SELECT * FROM budgets ORDER BY month DESC, category")
     fun observeBudgets(): Flow<List<MonthlyBudget>>
+
+    @Query("SELECT * FROM audit_events ORDER BY editedAtMs DESC")
+    suspend fun allAudit(): List<TransactionAudit>
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertAudit(audit: TransactionAudit): Long
 
     @Query("SELECT * FROM sms ORDER BY receivedAtMs")
     suspend fun allSms(): List<StoredSms>
@@ -156,11 +173,12 @@ interface LedgerDao {
     @Query("DELETE FROM sources") suspend fun clearSources()
     @Query("DELETE FROM merchant_rules") suspend fun clearRules()
     @Query("DELETE FROM budgets") suspend fun clearBudgets()
+    @Query("DELETE FROM audit_events") suspend fun clearAudit()
 }
 
 @Database(
     entities = [StoredSms::class, LedgerTransaction::class, FinancialSource::class,
-        MerchantRule::class, MonthlyBudget::class],
+        MerchantRule::class, MonthlyBudget::class, TransactionAudit::class],
     version = 1,
     exportSchema = true
 )

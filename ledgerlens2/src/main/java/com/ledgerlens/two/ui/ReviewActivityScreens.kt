@@ -55,7 +55,8 @@ internal fun TransactionRow(
                 },
                     fontWeight = FontWeight.SemiBold, maxLines = 1,
                     overflow = TextOverflow.Ellipsis)
-                SmallLabel((t.category ?: t.kind.replace('_', ' ').lowercase()
+                SmallLabel((t.accountHint?.let { "••" + it + " · " } ?: "") +
+                    (t.category ?: t.kind.replace('_', ' ').lowercase()
                     .replaceFirstChar(Char::uppercaseChar)) +
                     " · " + dateLabel(t.occurredAtMs))
                 if (showIssues) {
@@ -171,7 +172,7 @@ internal fun ActivityScreen(
     val filtered = remember(transactions, sources, month, currency, allMonths, search, filter) {
         transactions.filter { t ->
             t.currency == currency && (allMonths || monthOf(t) == month) &&
-                (search.isBlank() || listOfNotNull(t.merchant, t.category, t.kind, t.sender)
+                (search.isBlank() || listOfNotNull(t.merchant, t.category, t.kind, t.sender, t.accountHint)
                     .any { it.contains(search.trim(), ignoreCase = true) }) &&
                 when (filter) {
                     "Expenses" -> t.kind == Movement.EXPENSE

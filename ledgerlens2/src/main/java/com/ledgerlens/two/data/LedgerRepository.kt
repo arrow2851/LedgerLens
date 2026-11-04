@@ -55,7 +55,7 @@ class LedgerRepository(private val db: LedgerDatabase) {
             val newKind = request.kind
             // Inclusion is derived from confirmed treatment. A P2P remains outside spending.
             val excluded = when (newKind) {
-                Movement.EXPENSE, Movement.REFUND, Movement.REIMBURSEMENT -> request.excluded
+                Movement.EXPENSE, Movement.HOLD, Movement.REFUND, Movement.REIMBURSEMENT -> request.excluded
                 else -> true
             }
             val changed = previous.copy(

@@ -44,7 +44,15 @@ internal fun TransactionRow(
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(t.merchant?.takeIf { it.isNotBlank() } ?: "Merchant to confirm",
+                Text(t.merchant?.takeIf { it.isNotBlank() } ?: when (t.kind) {
+                    Movement.INCOME -> "Incoming deposit"
+                    Movement.CARD_PAYMENT -> "Card payment"
+                    Movement.TRANSFER -> "Transfer"
+                    Movement.P2P_REVIEW -> "Payment to classify"
+                    Movement.HOLD -> "Pending card hold"
+                    Movement.SCHEDULED -> "Scheduled payment"
+                    else -> "Merchant to confirm"
+                },
                     fontWeight = FontWeight.SemiBold, maxLines = 1,
                     overflow = TextOverflow.Ellipsis)
                 SmallLabel((t.category ?: t.kind.replace('_', ' ').lowercase()

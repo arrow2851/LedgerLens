@@ -61,7 +61,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         val context = getApplication<Application>()
         val input = context.contentResolver.openInputStream(uri)
             ?: error("Cannot read selected JSON")
-        val report = input.bufferedReader().use(repository.ingestor::importJson)
+        val report = input.bufferedReader().use { reader -> repository.ingestor.importJson(reader) }
         "Read " + report.received + " received SMS • " + report.inserted +
             " new transactions • " + report.ignored + " non-transactions excluded"
     }
@@ -119,7 +119,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     fun restoreBackup(uri: Uri) = work("Restoring full backup") {
         val input = getApplication<Application>().contentResolver.openInputStream(uri)
             ?: error("Cannot read selected backup")
-        val count = InputStreamReader(input, Charsets.UTF_8).use(repository::restoreBackup)
+        val count = InputStreamReader(input, Charsets.UTF_8).use { reader -> repository.restoreBackup(reader) }
         "Restored " + count + " transactions, sources, merchant rules, budgets and saved SMS."
     }
 

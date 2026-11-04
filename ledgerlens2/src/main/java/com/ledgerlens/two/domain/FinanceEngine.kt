@@ -24,6 +24,8 @@ object Movement {
     const val CARD_PAYMENT = "CARD_PAYMENT"
     const val TRANSFER = "TRANSFER"
     const val P2P_REVIEW = "P2P_REVIEW"
+    const val HOLD = "HOLD"
+    const val SCHEDULED = "SCHEDULED"
 }
 
 data class CategorySuggestion(val name: String, val confidence: Double, val reason: String)
@@ -52,24 +54,26 @@ object FinanceEngine {
         """(?i)\b(discount|offer|cashback offer|save up to|shop now|apply now|pre-qualify|limited time|promotion|eligible for|special deal|refer a friend)\b"""
     )
     private val notPosted = Regex(
-        """(?i)\b(declined|failed|unsuccessful|was rejected|could not be processed|pending approval|authorization hold|account notification|threshold|balance alert|low balance|fraud alert|possible unauthori[sz]ed|was blocked|attempted)\b"""
+        """(?i)\b(declined|failed|unsuccessful|was rejected|could not be processed|pending approval|low balance|fraud alert|possible unauthori[sz]ed|was blocked|attempted)\b"""
     )
     private val posted = Regex(
-        """(?i)\b(debited|deducted|credited|deposited|spent|charged|withdrawn|withdrawal of|purchase of|payment (?:of|received|processed|successful|made)|paid|transferred|transfer (?:of|completed|successful)|received (?:a )?(?:payment|transfer)|sent you|has been sent|txn (?:of|for)|transaction (?:of|for|at)|refunded|refund (?:of|processed))\b"""
+        """(?i)\b(debited|deducted|credited|deposited|spent|charged|withdrawn|withdrawal of|purchase of|payment (?:of|received|processed|successful|made)|paid|transferred|transfer (?:of|completed|successful)|external transfer|debit card transaction|direct deposit posted|received (?:a )?(?:payment|transfer)|sent you|has been sent|txn (?:of|for)|transaction (?:of|for|at|with)|refunded|refund (?:of|processed))\b"""
     )
+    private val holds = Regex("""(?i)\b(?:chrge or hold|charge or hold|authorization hold|preauthorization)\b""")
+    private val scheduled = Regex("""(?i)\b(?:is scheduled|scheduled payment|will be paid|scheduled for)\b""")
     private val refunds = Regex("""(?i)\b(refunded|refund processed|refund of|reversal|reversed|chargeback|credited back)\b""")
-    private val incoming = Regex("""(?i)\b(credited|deposited|received a payment|payment received|sent you|was received|has been received)\b""")
+    private val incoming = Regex("""(?i)\b(credited|deposited|direct deposit|received a payment|payment received|sent you|was received|has been received)\b""")
     private val cards = Regex(
-        """(?i)\b(credit card payment|card payment received|payment to (?:your )?(?:credit )?card|payment (?:received|posted|made) (?:on|to|for) (?:your )?(?:credit )?card|autopay (?:payment|posted))\b"""
+        """(?i)\b(credit card payment|card payment received|payment to (?:your )?(?:credit )?card|payment (?:received|posted|made) (?:on|to|for) (?:your )?(?:credit )?card|autopay (?:payment|posted)|you paid.{0,70}to your.{0,40}credit card)\b"""
     )
     private val transfers = Regex(
-        """(?i)\b(transfer(?:red)? (?:to|from|between|of)|funds transferred|zelle|venmo|cash app|upi|imps|neft|rtgs|person to person|p2p)\b"""
+        """(?i)\b(transfer(?:red)? (?:to|from|between|of)|external transfer|funds transferred|zelle|venmo|cash app|upi|imps|neft|rtgs|person to person|p2p)\b"""
     )
     private val outgoing = Regex(
-        """(?i)\b(debited|deducted|spent|charged|withdrawn|purchase|paid|payment of|transferred from|sent to)\b"""
+        """(?i)\b(debited|deducted|spent|charged|withdrawn|purchase|debit card transaction|paid|payment of|transferred from|sent to)\b"""
     )
     private val merchantPattern = Regex(
-        """(?i)\b(?:at|to|towards|merchant:|payee:)\s+([A-Za-z0-9][\p{L}\p{N} .&'*/#_-]{2,75})"""
+        """(?i)\b(?:at|to|towards|with|merchant:|payee:)\s+([A-Za-z0-9][\p{L}\p{N} .&'*/#_-]{2,75})"""
     )
     private val badMerchant = Regex("""(?i)\b(?:a/c|account|card|xx\d+|x\d{3,}|ending|ref#|ref no|txn|balance|credit card)\b""")
     private val keywords = listOf(
@@ -100,7 +104,9 @@ object FinanceEngine {
         if (body.isBlank() || body == "nullnull" || body.length > 4000) return null
         val matched = money.find(body) ?: return null
         if (auth.containsMatchIn(body) || notPosted.containsMatchIn(body)) return null
-        if (!posted.containsMatchIn(body)) return null
+        val pendingHold = holds.containsMatchIn(body)
+        val scheduledPayment = scheduled.containsMatchIn(body)
+        if (!posted.containsMatchIn(body) && !pendingHold && !scheduledPayment) return null
         if (advertising.containsMatchIn(body) &&
             !Regex("""(?i)\b(?:was|has been|successfully|completed|posted)\b""").containsMatchIn(body)
         ) return null
@@ -119,10 +125,13 @@ object FinanceEngine {
             else -> "USD"
         }
         val treatment = when {
+            pendingHold -> Movement.HOLD
+            scheduledPayment -> Movement.SCHEDULED
             cards.containsMatchIn(body) -> Movement.CARD_PAYMENT
             refunds.containsMatchIn(body) -> Movement.REFUND
             transfers.containsMatchIn(body) -> {
                 if (incoming.containsMatchIn(body) && !outgoing.containsMatchIn(body)) Movement.TRANSFER
+                else if (Regex("""(?i)\bexternal transfer\b""").containsMatchIn(body)) Movement.TRANSFER
                 else Movement.P2P_REVIEW
             }
             incoming.containsMatchIn(body) && !outgoing.containsMatchIn(body) -> Movement.INCOME
@@ -134,6 +143,7 @@ object FinanceEngine {
             merchant?.let(::suggestCategory) else null
         val confidence = when {
             treatment == Movement.P2P_REVIEW -> .54
+            treatment == Movement.HOLD || treatment == Movement.SCHEDULED -> .85
             merchant == null && treatment == Movement.EXPENSE -> .68
             suggested != null -> .90
             treatment == Movement.EXPENSE -> .78

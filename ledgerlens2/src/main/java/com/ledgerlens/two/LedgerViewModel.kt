@@ -34,6 +34,14 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     )
     val notice = MutableStateFlow("LedgerLens2 is independent from LedgerLens 1.0")
     val busy = MutableStateFlow(false)
+    val smsEvidence = MutableStateFlow<String?>(null)
+
+    fun loadSmsEvidence(smsId: Long) {
+        smsEvidence.value = null
+        viewModelScope.launch {
+            smsEvidence.value = repository.rawSmsBody(smsId)
+        }
+    }
 
     private fun work(label: String, job: suspend () -> String) {
         viewModelScope.launch {

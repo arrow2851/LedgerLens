@@ -125,7 +125,9 @@ class SmsIngestor(private val database: LedgerDatabase) {
                 val savedCategory = oldRules[key]?.category
                 val matching = old.asReversed().firstOrNull { other ->
                     other.sourceKey == sms.sender && other.currency == decision.currency &&
-                        other.kind == decision.kind && other.amountMinor == decision.amountMinor &&
+                        FinanceEngine.matchingKindForDuplicate(other.kind) ==
+                            FinanceEngine.matchingKindForDuplicate(decision.kind) &&
+                        other.amountMinor == decision.amountMinor &&
                         kotlin.math.abs(other.occurredAtMs - sms.receivedAtMs) <= 300_000L &&
                         (key.isBlank() || other.merchantKey.isBlank() || key == other.merchantKey)
                 }

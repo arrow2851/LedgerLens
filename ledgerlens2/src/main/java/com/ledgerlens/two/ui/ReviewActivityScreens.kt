@@ -159,7 +159,7 @@ internal fun ActivityScreen(
     var search by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf("All") }
     var allMonths by remember { mutableStateOf(false) }
-    val options = listOf("All", "Expenses", "Income", "Transfers", "Refunds", "Review")
+    val options = listOf("All", "Expenses", "Income", "Transfers", "Refunds", "Pending", "Review")
     val filtered = remember(transactions, sources, month, currency, allMonths, search, filter) {
         transactions.filter { t ->
             t.currency == currency && (allMonths || monthOf(t) == month) &&
@@ -172,6 +172,7 @@ internal fun ActivityScreen(
                         Movement.TRANSFER, Movement.P2P_REVIEW, Movement.CARD_PAYMENT
                     )
                     "Refunds" -> t.kind in listOf(Movement.REFUND, Movement.REIMBURSEMENT)
+                    "Pending" -> t.kind in listOf(Movement.HOLD, Movement.SCHEDULED)
                     "Review" -> issues(t, sources).isNotEmpty()
                     else -> true
                 }

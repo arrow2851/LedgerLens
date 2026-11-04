@@ -14,4 +14,4 @@ dependencyResolutionManagement {
  repositories { google(); mavenCentral() }
 }
 rootProject.name = "LedgerLens"
-include(":app", ":ledgerlens2")
+include(":ledgerlens2")

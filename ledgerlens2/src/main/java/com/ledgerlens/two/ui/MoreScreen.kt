@@ -81,7 +81,7 @@ internal fun MoreScreen(
     }
     pendingSourceApproval?.let { source ->
         val matching = transactions.filter { it.sourceKey == source.sender }
-        val expenses = matching.filter { it.kind == com.ledgerlens.two.domain.Movement.EXPENSE }
+        val expenses = matching.filter { it.kind in listOf(com.ledgerlens.two.domain.Movement.EXPENSE, com.ledgerlens.two.domain.Movement.HOLD) }
         AlertDialog(
             onDismissRequest = { pendingSourceApproval = null },
             title = { Text("Approve this SMS source?") },

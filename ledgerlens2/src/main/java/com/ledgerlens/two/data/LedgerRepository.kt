@@ -28,6 +28,10 @@ class LedgerRepository(private val db: LedgerDatabase) {
     val budgets = db.dao().observeBudgets()
     val ingestor = SmsIngestor(db)
 
+    suspend fun rawSmsBody(smsId: Long): String? = withContext(Dispatchers.IO) {
+        db.dao().smsById(smsId)?.body
+    }
+
     suspend fun approveSource(sender: String, approved: Boolean) = withContext(Dispatchers.IO) {
         val source = db.dao().sourceBySender(sender) ?: return@withContext
         db.dao().updateSource(source.copy(approved = approved, updatedAtMs = System.currentTimeMillis()))

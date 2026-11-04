@@ -189,8 +189,12 @@ internal fun MoreScreen(
                         Column(Modifier.weight(1f)) {
                             Text(source.institution ?: "Unrecognized sender",
                                 fontWeight = FontWeight.SemiBold)
+                            val accountHints = transactions.filter { it.sourceKey == source.sender }
+                                .mapNotNull { it.accountHint }.distinct().sorted()
                             SmallLabel(source.sender + " · " +
-                                transactions.count { it.sourceKey == source.sender } + " candidates")
+                                transactions.count { it.sourceKey == source.sender } + " candidates" +
+                                if (accountHints.isEmpty()) "" else
+                                    " · " + accountHints.joinToString(", ") { "••" + it })
                         }
                         Switch(checked = source.approved,
                             onCheckedChange = { enabled ->

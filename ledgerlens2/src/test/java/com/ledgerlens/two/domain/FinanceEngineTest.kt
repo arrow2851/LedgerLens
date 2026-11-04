@@ -93,4 +93,51 @@ class FinanceEngineTest {
             assertEquals(0L, FinanceEngine.impact(it, 4200L, false, true))
         }
     }
+    @Test fun capitalOneChargeOrHoldMustNotBeCountedAsSpending() {
+        val t = FinanceEngine.parse(sms(
+            "Capital One: A chrge or hold for $89.35 on Nov 1, 2026 was placed on your Venture Credit Card (7973) at GROCERY STORE. Std carrier charges apply."
+        ))!!
+        assertEquals(Movement.HOLD, t.kind)
+        assertEquals(0L, FinanceEngine.impact(t.kind, t.amountMinor, false, true))
+    }
+
+    @Test fun chaseExternalTransferIsAccountMovementNotPurchase() {
+        val t = FinanceEngine.parse(sms(
+            "Chase acct 1234: Your $152.00 external transfer to ROBINHOOD on Oct 3 at 9:00 AM was more than the $100 in your Alerts settings."
+        ))!!
+        assertEquals(15_200L, t.amountMinor)
+        assertEquals(Movement.TRANSFER, t.kind)
+        assertEquals(0L, FinanceEngine.impact(t.kind, t.amountMinor, false, true))
+    }
+
+    @Test fun chaseDebitCardThresholdAlertIsRealSpending() {
+        val t = FinanceEngine.parse(sms(
+            "Chase acct 1234: Your $12.50 debit card transaction with COSTCO on Oct 6 at 9:41 AM was more than the $10 in your Alerts settings."
+        ))!!
+        assertEquals(Movement.EXPENSE, t.kind)
+        assertTrue(t.merchant.orEmpty().contains("COSTCO"))
+    }
+
+    @Test fun chaseDirectDepositIsIncome() {
+        val t = FinanceEngine.parse(sms(
+            "Chase acct 1234: Your recent $3,800.00 Direct Deposit posted on Oct 10 at 8:15 AM was more than the $100 limit in your Alerts settings."
+        ))!!
+        assertEquals(Movement.INCOME, t.kind)
+    }
+
+    @Test fun capitalOnePaidCreditCardIsExcludedFromSpending() {
+        val t = FinanceEngine.parse(sms(
+            "Capital One Alert: You paid $1,250.06 to your Venture Credit Card (1234) on October 13, 2026."
+        ))!!
+        assertEquals(Movement.CARD_PAYMENT, t.kind)
+        assertEquals(0L, FinanceEngine.impact(t.kind, t.amountMinor, false, true))
+    }
+
+    @Test fun scheduledPaymentIsNotPostedExpense() {
+        val t = FinanceEngine.parse(sms(
+            "Capital One Alert: Your payment of $1,200.50 is scheduled for December 9, 2026."
+        ))!!
+        assertEquals(Movement.SCHEDULED, t.kind)
+    }
+
 }

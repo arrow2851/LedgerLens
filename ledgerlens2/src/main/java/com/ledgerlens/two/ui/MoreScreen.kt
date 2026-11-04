@@ -72,10 +72,60 @@ internal fun MoreScreen(
     var selectedMerchantCategory by remember { mutableStateOf(FinanceEngine.categories.first()) }
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmRestore by remember { mutableStateOf(false) }
+    var pendingSourceApproval by remember { mutableStateOf<FinancialSource?>(null) }
+    var pendingMerchantDefault by remember { mutableStateOf<Pair<String, String>?>(null) }
     val merchantGroups = remember(transactions) {
         transactions.filter { it.merchantKey.isNotBlank() }
             .groupBy { it.merchantKey }.toList()
             .sortedByDescending { (_, rows) -> rows.count { it.category.isNullOrBlank() } }
+    }
+    pendingSourceApproval?.let { source ->
+        val matching = transactions.filter { it.sourceKey == source.sender }
+        val expenses = matching.filter { it.kind == com.ledgerlens.two.domain.Movement.EXPENSE }
+        AlertDialog(
+            onDismissRequest = { pendingSourceApproval = null },
+            title = { Text("Approve this SMS source?") },
+            text = {
+                Text((source.institution ?: source.sender) + " contains " +
+                    matching.size + " parsed candidate messages, of which " +
+                    expenses.size + " have expense treatment. Approving adds eligible expenses to spending. Inspect sender identity before approving.")
+            },
+            confirmButton = {
+                Button(onClick = {
+                    onSource(source.sender, true)
+                    pendingSourceApproval = null
+                }) { Text("Approve source") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingSourceApproval = null }) { Text("Cancel") }
+            }
+        )
+    }
+    pendingMerchantDefault?.let { (merchant, category) ->
+        val key = FinanceEngine.canonicalMerchant(merchant)
+        val affected = transactions.count { it.merchantKey == key && !it.categoryUserEdited }
+        val saved = rules.firstOrNull { it.merchantKey == key }
+        AlertDialog(
+            onDismissRequest = { pendingMerchantDefault = null },
+            title = { Text("Apply merchant default?") },
+            text = {
+                Text("Assign " + category + " to " + merchant + " for " + affected +
+                    " unedited transactions and future imports." +
+                    (if (saved != null && saved.category != category)
+                        " This replaces an existing " + saved.category + " default." else "") +
+                    " Manual transaction exceptions remain untouched.")
+            },
+            confirmButton = {
+                Button(onClick = {
+                    onMerchantRule(merchant, category)
+                    selectedMerchant = ""
+                    pendingMerchantDefault = null
+                }) { Text("Apply rule") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingMerchantDefault = null }) { Text("Cancel") }
+            }
+        )
     }
     if (confirmDelete) AlertDialog(
         onDismissRequest = { confirmDelete = false },
@@ -143,7 +193,10 @@ internal fun MoreScreen(
                                 transactions.count { it.sourceKey == source.sender } + " candidates")
                         }
                         Switch(checked = source.approved,
-                            onCheckedChange = { onSource(source.sender, it) })
+                            onCheckedChange = { enabled ->
+                                if (enabled) pendingSourceApproval = source
+                                else onSource(source.sender, false)
+                            })
                     }
                     HorizontalDivider(color = CanvasColor)
                 }
@@ -161,8 +214,7 @@ internal fun MoreScreen(
                 onCategory = { selectedMerchantCategory = it })
             Button(
                 onClick = {
-                    onMerchantRule(selectedMerchant, selectedMerchantCategory)
-                    selectedMerchant = ""
+                    pendingMerchantDefault = selectedMerchant.trim() to selectedMerchantCategory
                 },
                 enabled = selectedMerchant.isNotBlank() && selectedMerchantCategory.isNotBlank(),
                 modifier = Modifier.fillMaxWidth()
@@ -178,7 +230,16 @@ internal fun MoreScreen(
                         horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(name, modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.bodyMedium)
-                        SmallLabel(rows.size.toString() + " transactions")
+                        TextButton(onClick = {
+                            selectedMerchant = name
+                            selectedMerchantCategory = rows.firstOrNull {
+                                !it.category.isNullOrBlank()
+                            }?.category ?: FinanceEngine.suggestCategory(name)?.name
+                                ?: FinanceEngine.categories.first()
+                            expandMerchants = false
+                        }) {
+                            Text("Categorize " + rows.size)
+                        }
                     }
                 }
             }

@@ -160,6 +160,7 @@ fun LedgerApp(
     val budgets by model.budgets.collectAsState()
     val notice by model.notice.collectAsState()
     val busy by model.busy.collectAsState()
+    val smsEvidence by model.smsEvidence.collectAsState()
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var month by rememberSaveable { mutableStateOf(YearMonth.now().toString()) }
     val currencies = remember(transactions) {
@@ -169,6 +170,9 @@ fun LedgerApp(
     var focusedTransaction by remember { mutableStateOf<LedgerTransaction?>(null) }
     val allIssueCount = remember(transactions, sources) {
         transactions.count { issues(it, sources).isNotEmpty() }
+    }
+    LaunchedEffect(focusedTransaction?.smsId) {
+        focusedTransaction?.smsId?.let(model::loadSmsEvidence)
     }
     MaterialTheme(colorScheme = modernScheme, typography = Typography()) {
         Scaffold(
@@ -250,7 +254,7 @@ fun LedgerApp(
         }
         focusedTransaction?.let { current ->
             TransactionEditor(
-                transaction = current, sources = sources,
+                transaction = current, sources = sources, evidence = smsEvidence,
                 onDismiss = { focusedTransaction = null },
                 onSave = { draft ->
                     model.editTransaction(current.id, draft)

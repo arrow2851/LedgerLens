@@ -146,4 +146,13 @@ class FinanceEngineTest {
         )))
     }
 
+    @Test fun cardAndAccountHintsCanBeRecoveredWithoutFullAccountNumber() {
+        assertEquals("7973", FinanceEngine.extractAccountHint(
+            "Capital One: A chrge or hold for $22.00 was placed on your Venture Credit Card (7973) at Walmart."
+        ))
+        assertEquals("1234", FinanceEngine.extractAccountHint(
+            "Chase acct 1234: Your $8.05 debit card transaction with a merchant posted."
+        ))
+    }
+
 }
